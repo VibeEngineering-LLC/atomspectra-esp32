@@ -1,0 +1,80 @@
+﻿#pragma once
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#define SPECTRUM_CHANNELS     8192
+#define SPECTRUM_CHUNK_BINS   64
+#define SPECTRUM_CHUNKS       (SPECTRUM_CHANNELS / SPECTRUM_CHUNK_BINS)
+
+#define ANALYZER_VID          0x1A86
+#define ANALYZER_PID          0x55D3
+#define ANALYZER_BAUD         600000
+
+#define WIFI_SSID_MAX         32
+#define WIFI_PASS_MAX         64
+#define WEB_AUTH_USER         "admin"
+
+#define TCP_BRIDGE_PORT       8234
+
+#define CMD_HISTOGRAM         0x01
+#define CMD_OSCILLOSCOPE      0x02
+#define CMD_TEXT              0x03
+#define CMD_STAT              0x04
+#define CMD_REBOOT            0xF3
+
+#define CALIB_COEFFS          5
+
+typedef struct {
+    uint32_t bins[SPECTRUM_CHANNELS];
+    uint32_t total_counts;
+    uint32_t total_time_sec;
+    uint16_t cpu_load;
+    uint32_t cps;
+    uint32_t lost_impulses;
+    float    temperature[3];
+    double   calibration[CALIB_COEFFS];
+    int      calib_order;
+    char     serial_number[64];
+    bool     valid;
+    bool     calib_valid;
+} spectrum_data_t;
+
+typedef struct {
+    uint8_t  dev;
+    uint8_t  version;
+    uint16_t rise;
+    uint16_t fall;
+    uint16_t noise;
+    float    freq;
+    uint32_t max_integral;
+    uint16_t hyst;
+    uint8_t  mode;
+    uint8_t  step;
+    uint32_t time_sec;
+    uint8_t  pot;
+    float    t1, t2, t3;
+    bool     tc_on;
+    uint16_t tp;
+    bool     valid;
+} device_info_t;
+
+void usb_host_cdc_init(void);
+bool usb_host_cdc_is_connected(void);
+int  usb_host_cdc_send(const uint8_t *data, size_t len);
+
+void wifi_manager_init(void);
+bool wifi_is_connected(void);
+
+void web_server_init(void);
+
+void spectrum_init(void);
+void spectrum_process_histogram_chunk(const uint8_t *data, size_t len);
+void spectrum_process_stat_packet(const uint8_t *data, size_t len);
+void spectrum_process_info_response(const char *text);
+void spectrum_reset(void);
+const spectrum_data_t *spectrum_get_current(void);
+const device_info_t   *spectrum_get_device_info(void);
+int  spectrum_save_to_flash(void);
+int  spectrum_list_saved(char *buf, size_t buf_size);
+int  spectrum_load_from_flash(int index, spectrum_data_t *out);

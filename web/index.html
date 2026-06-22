@@ -1,0 +1,78 @@
+﻿<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AtomSpectra Gateway</title>
+<style>
+body{font-family:monospace;background:#111;color:#0f0;margin:20px}
+canvas{border:1px solid #0f0;display:block;margin:10px 0}
+button{background:#222;color:#0f0;border:1px solid #0f0;padding:8px 16px;cursor:pointer;margin:4px}
+button:hover{background:#0f0;color:#111}
+.info{color:#0a0;font-size:14px;margin:8px 0}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#log{color:#080;font-size:12px;max-height:120px;overflow-y:auto;white-space:pre;margin-top:8px}
+</style></head>
+<body>
+<h1>AtomSpectra Gateway</h1>
+<div class="info" id="status">Connecting...</div>
+<canvas id="sp" width="1200" height="400"></canvas>
+<div class="row">
+<button onclick="resetSpectrum()">Reset</button>
+<button onclick="saveSpectrum()">Save</button>
+<button onclick="location.href='/api/export.xml'">Export XML</button>
+<button onclick="location.href='/api/export.csv'">Export CSV</button>
+<button onclick="requestInfo()">Info</button>
+<button onclick="toggleLog()">Log</button>
+<input id="cmd" placeholder="-inf" style="background:#222;color:#0f0;border:1px solid #0f0;padding:8px;width:200px">
+<button onclick="sendCmd()">Send</button>
+</div>
+<pre id="log" style="display:none"></pre>
+
+<script>
+var C = document.getElementById("sp");
+var X = C.getContext("2d");
+var logEl = document.getElementById("log");
+
+function log(msg) {
+    logEl.textContent += msg + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function update() {
+    try {
+        var r = await fetch("/api/spectrum.json");
+        if (!r.ok) { document.getElementById("status").textContent = "No data"; return; }
+        var d = await r.json();
+        document.getElementById("status").textContent =
+            "Counts: " + d.total + " | CPU: " + d.cpu + "% | T1: " + d.t1 + "C | T2: " + d.t2 + "C | T3: " + d.t3 + "C";
+        var mx = 0;
+        for (var i = 0; i < d.bins.length; i++) if (d.bins[i] > mx) mx = d.bins[i];
+        if (mx < 1) mx = 1;
+        X.fillStyle = "#111"; X.fillRect(0, 0, 1200, 400);
+        X.fillStyle = "#0f0";
+        var bw = 1200.0 / d.bins.length;
+        for (var i = 0; i < d.bins.length; i++) {
+            var h = d.bins[i] / mx * 380;
+            X.fillRect(i * bw, 400 - h, Math.max(bw - 0.3, 0.3), h);
+        }
+    } catch(e) { document.getElementById("status").textContent = "Error: " + e; }
+}
+
+async function resetSpectrum() { await fetch("/api/reset", {method:"POST"}); log("Reset sent"); update(); }
+async function saveSpectrum() {
+    var r = await (await fetch("/api/save", {method:"POST"})).json();
+    log(r.ok ? "Saved #" + r.index : "Save error");
+}
+async function requestInfo() { await fetch("/api/command", {method:"POST", body:"-inf"}); log("Info requested"); setTimeout(update, 500); }
+async function sendCmd() {
+    var c = document.getElementById("cmd").value;
+    if (!c) return;
+    await fetch("/api/command", {method:"POST", body:c});
+    log("Sent: " + c);
+    setTimeout(update, 500);
+}
+function toggleLog() { logEl.style.display = logEl.style.display === "none" ? "block" : "none"; }
+
+document.getElementById("cmd").addEventListener("keydown", function(e) { if (e.key === "Enter") sendCmd(); });
+setInterval(update, 1000);
+update();
+</script>
+</body></html>

@@ -18,6 +18,12 @@ void app_main(void)
     ESP_LOGI(TAG, "AtomSpectra Gateway starting...");
 
     wifi_manager_init();
+
+    if (wifi_manager_is_ap_mode()) {
+        ESP_LOGI(TAG, "Captive portal active, waiting for WiFi config");
+        while (1) { vTaskDelay(pdMS_TO_TICKS(10000)); }
+    }
+
     spectrum_init();
     usb_host_cdc_init();
     web_server_init();

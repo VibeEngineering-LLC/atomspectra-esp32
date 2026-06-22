@@ -65,6 +65,7 @@ int  usb_host_cdc_send(const uint8_t *data, size_t len);
 
 void wifi_manager_init(void);
 bool wifi_is_connected(void);
+bool wifi_manager_is_ap_mode(void);
 
 void web_server_init(void);
 

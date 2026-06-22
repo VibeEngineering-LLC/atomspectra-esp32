@@ -77,6 +77,9 @@ void spectrum_process_info_response(const char *text)
         strncpy(s_spectrum.serial_number, lbuf[39], sizeof(s_spectrum.serial_number) - 1);
         ESP_LOGI(TAG, "Serial: %s", s_spectrum.serial_number);
     }
+    ESP_LOGI(TAG, "Info response: %d lines", lcount);
+    for (int i = 0; i < lcount && i < 12; i++)
+        ESP_LOGI(TAG, "  L[%d]: \"%s\"", i, lbuf[i]);
     if (lcount >= 11) {
         char hcat[256] = {0};
         for (int i = 0; i < 10; i++) strcat(hcat, lbuf[i]);
@@ -104,7 +107,7 @@ void spectrum_process_info_response(const char *text)
             s_spectrum.calib_valid = true;
             ESP_LOGI(TAG, "Calibration OK: order=%d", s_spectrum.calib_order);
         } else {
-            ESP_LOGW(TAG, "Calibration CRC mismatch");
+            ESP_LOGW(TAG, "Calibration CRC mismatch: computed=%08x expected=%08x", (unsigned)cc, (unsigned)ce);
         }
     }
     const char *p = text;

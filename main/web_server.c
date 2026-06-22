@@ -86,12 +86,20 @@ static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *s
     char tail[320];
     snprintf(tail, sizeof(tail),
         "],\"total\":%"  PRIu32 ",\"cpu\":%u,\"cps\":%"  PRIu32 ",\"lost\":%"  PRIu32 ",\"time\":%"  PRIu32 ","
-        "\"t1\":%.1f,\"t2\":%.1f,\"t3\":%.1f,\"serial\":\"%s\"}",
+        "\"t1\":%.1f,\"t2\":%.1f,\"t3\":%.1f,\"serial\":\"%s\"",
         sp->total_counts, sp->cpu_load, sp->cps, sp->lost_impulses,
         sp->total_time_sec,
         sp->temperature[0], sp->temperature[1], sp->temperature[2],
         sp->serial_number[0] ? sp->serial_number : "");
     httpd_resp_sendstr_chunk(req, tail);
+    if (sp->calib_valid) {
+        char cal[256]; int p = snprintf(cal,sizeof(cal),",\"calib\":[");
+        for (int i=0; i<=sp->calib_order; i++)
+            p += snprintf(cal+p,sizeof(cal)-p,"%s%.15g",i?",":"",sp->calibration[i]);
+        snprintf(cal+p,sizeof(cal)-p,"]");
+        httpd_resp_sendstr_chunk(req, cal);
+    }
+    httpd_resp_sendstr_chunk(req, "}");
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }

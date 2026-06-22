@@ -8,8 +8,8 @@
 #define SPECTRUM_CHUNK_BINS   64
 #define SPECTRUM_CHUNKS       (SPECTRUM_CHANNELS / SPECTRUM_CHUNK_BINS)
 
-#define ANALYZER_VID          0x1A86
-#define ANALYZER_PID          0x55D3
+#define ANALYZER_VID          0x0403
+#define ANALYZER_PID          0x6001
 #define ANALYZER_BAUD         600000
 
 #define WIFI_SSID_MAX         32

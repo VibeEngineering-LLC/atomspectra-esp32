@@ -6,6 +6,10 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_system.h"
 
 static const char *TAG = "web";
 
@@ -335,6 +339,20 @@ static esp_err_t handle_export_csv(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handle_wifi_reset(httpd_req_t *req)
+{
+    nvs_handle_t nvs;
+    if (nvs_open("wifi", NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_erase_all(nvs);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 void web_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -359,6 +377,7 @@ void web_server_init(void)
         {"/api/list",          HTTP_GET,  handle_list,          NULL},
         {"/api/export.xml",    HTTP_GET,  handle_export_xml,    NULL},
         {"/api/export.csv",    HTTP_GET,  handle_export_csv,    NULL},
+        {"/api/wifi/reset",    HTTP_POST, handle_wifi_reset,    NULL},
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++)

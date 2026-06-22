@@ -21,6 +21,7 @@ button:hover{background:#0f0;color:#111}
 <button onclick="location.href='/api/export.csv'">Export CSV</button>
 <button onclick="requestInfo()">Info</button>
 <button onclick="toggleLog()">Log</button>
+<button onclick="resetWifi()" style="border-color:#f80;color:#f80">WiFi Reset</button>
 <input id="cmd" placeholder="-inf" style="background:#222;color:#0f0;border:1px solid #0f0;padding:8px;width:200px">
 <button onclick="sendCmd()">Send</button>
 </div>
@@ -70,6 +71,11 @@ async function sendCmd() {
     setTimeout(update, 500);
 }
 function toggleLog() { logEl.style.display = logEl.style.display === "none" ? "block" : "none"; }
+async function resetWifi() {
+    if (!confirm("Clear WiFi config and reboot into setup mode?")) return;
+    await fetch("/api/wifi/reset", {method:"POST"});
+    document.getElementById("status").textContent = "Rebooting into WiFi setup...";
+}
 
 document.getElementById("cmd").addEventListener("keydown", function(e) { if (e.key === "Enter") sendCmd(); });
 setInterval(update, 1000);

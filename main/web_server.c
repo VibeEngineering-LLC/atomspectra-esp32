@@ -153,19 +153,22 @@ static esp_err_t handle_list(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"spectra\":[");
-    char path[64], item[128];
+    char path[64], item[160];
     int count = 0;
     for (int i = 0; i < 9999; i++) {
         snprintf(path, sizeof(path), "%s/spec_%04d.bin", STORAGE_PATH, i);
         FILE *f = fopen(path, "rb");
         if (!f) continue;
         uint32_t counts = 0, time_sec = 0;
+        time_t saved_at = 0;
         fseek(f, offsetof(spectrum_data_t, total_counts), SEEK_SET);
         fread(&counts, 4, 1, f);
         fread(&time_sec, 4, 1, f);
+        fseek(f, offsetof(spectrum_data_t, saved_at), SEEK_SET);
+        fread(&saved_at, sizeof(time_t), 1, f);
         fclose(f);
-        int n = snprintf(item, sizeof(item), "%s{\"index\":%d,\"counts\":%u,\"time\":%u}",
-            count > 0 ? "," : "", i, counts, time_sec);
+        int n = snprintf(item, sizeof(item), "%s{\"index\":%d,\"counts\":%u,\"time\":%u,\"saved_at\":%ld}",
+            count > 0 ? "," : "", i, counts, time_sec, (long)saved_at);
         httpd_resp_send_chunk(req, item, n);
         count++;
     }
@@ -205,12 +208,11 @@ static esp_err_t render_spectrum_xml(httpd_req_t *req, const spectrum_data_t *sp
         "  <ResultDataList>\r\n"
         "    <ResultData>\r\n");
 
-    time_t now;
-    time(&now);
+    time_t end_time = (sp->saved_at > 0) ? sp->saved_at : time(NULL);
     struct tm ts, te;
-    time_t t_start = now - sp->total_time_sec;
+    time_t t_start = end_time - sp->total_time_sec;
     localtime_r(&t_start, &ts);
-    localtime_r(&now, &te);
+    localtime_r(&end_time, &te);
 
     int n = snprintf(buf, 4096,
         "      <SampleInfo>\r\n"
@@ -335,10 +337,9 @@ static esp_err_t render_spectrum_csv(httpd_req_t *req, const spectrum_data_t *sp
     if (sp->cpu_load > 0 && sp->cpu_load < 10000)
         live_time *= (1.0f - (float)sp->cpu_load / 10000.0f);
 
-    time_t now;
-    time(&now);
+    time_t end_time = (sp->saved_at > 0) ? sp->saved_at : time(NULL);
     struct tm ts;
-    time_t t_start = now - sp->total_time_sec;
+    time_t t_start = end_time - sp->total_time_sec;
     localtime_r(&t_start, &ts);
 
     n = snprintf(buf, 4096,

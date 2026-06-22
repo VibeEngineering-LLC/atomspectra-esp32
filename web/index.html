@@ -81,10 +81,11 @@ async function loadSaved() {
             el.innerHTML = '<span class="empty">No saved spectra</span>';
             return;
         }
-        var html = '<table><tr><th>#</th><th>Counts</th><th>Duration</th><th>Export</th><th></th></tr>';
+        var html = '<table><tr><th>#</th><th>Saved</th><th>Counts</th><th>Duration</th><th>Export</th><th></th></tr>';
         for (var i = 0; i < r.spectra.length; i++) {
             var s = r.spectra[i];
-            html += '<tr><td>' + s.index + '</td><td>' + s.counts.toLocaleString() + '</td><td>' + fmtTime(s.time) + '</td>' +
+            var dt = s.saved_at > 0 ? new Date(s.saved_at * 1000).toLocaleString() : '—';
+            html += '<tr><td>' + s.index + '</td><td>' + dt + '</td><td>' + s.counts.toLocaleString() + '</td><td>' + fmtTime(s.time) + '</td>' +
                 '<td><a href="/api/saved/' + s.index + '/export.xml">XML</a> | ' +
                 '<a href="/api/saved/' + s.index + '/export.csv">CSV</a></td>' +
                 '<td><button class="del" onclick="delSaved(' + s.index + ')">Del</button></td></tr>';

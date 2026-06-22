@@ -167,6 +167,7 @@ int spectrum_save_to_flash(void)
         fclose(f);
         idx++;
     }
+    s_spectrum.saved_at = time(NULL);
     f = fopen(path, "wb");
     if (!f) { ESP_LOGE(TAG, "Cannot create %s", path); return -1; }
     fwrite(&s_spectrum, sizeof(s_spectrum), 1, f);

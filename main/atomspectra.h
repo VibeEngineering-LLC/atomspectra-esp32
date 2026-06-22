@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <time.h>
 
 #define SPECTRUM_CHANNELS     8192
 #define SPECTRUM_CHUNK_BINS   64
@@ -36,6 +37,7 @@ typedef struct {
     double   calibration[CALIB_COEFFS];
     int      calib_order;
     char     serial_number[64];
+    time_t   saved_at;
     bool     valid;
     bool     calib_valid;
 } spectrum_data_t;

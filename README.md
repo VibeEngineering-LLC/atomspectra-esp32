@@ -13,6 +13,7 @@ Connects to the spectrometer via USB, acquires 8192-channel spectra in real time
 - **InterSpec CSV export** — compatible with [InterSpec](https://sandialabs.github.io/InterSpec/)
 - **Energy calibration** parsed from device (polynomial up to order 4)
 - **Spectrum storage** on LittleFS (12.9 MB partition)
+- **TCP bridge** on port 8234 — transparent serial-over-WiFi for BecqMoni/AtomSpectra PC software
 - **WiFi captive portal** for initial network setup
 - **SNTP** time synchronization for export timestamps
 - **Web UI** with live spectrum chart, device stats, text command interface
@@ -77,6 +78,7 @@ atomspectra/
     usb_host_cdc.c         USB Host CDC-ACM driver
     wifi_manager.c         STA + AP captive portal
     web_server.c           HTTP API + exports
+    tcp_bridge.c           transparent serial-over-WiFi bridge
     spectrum.c             spectrum processing + LittleFS
   web/
     index.html             main UI
@@ -84,6 +86,14 @@ atomspectra/
   partitions.csv           custom partition table (LittleFS)
   sdkconfig.defaults       ESP32-S3 USB OTG config
 ```
+
+## TCP Bridge (Port 8234)
+
+Transparent serial-over-WiFi bridge. Connect BecqMoni or AtomSpectra PC software to `<device-ip>:8234` instead of a COM port. The bridge forwards raw bytes bidirectionally between the TCP client and the USB-connected spectrometer.
+
+- One client at a time
+- Data is also processed locally (Web UI works simultaneously)
+- TCP_NODELAY enabled for low latency
 
 ## Protocol
 

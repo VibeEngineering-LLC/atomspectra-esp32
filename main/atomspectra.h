@@ -59,15 +59,21 @@ typedef struct {
     bool     valid;
 } device_info_t;
 
+typedef void (*usb_raw_rx_cb_t)(const uint8_t *data, size_t len);
+
 void usb_host_cdc_init(void);
 bool usb_host_cdc_is_connected(void);
 int  usb_host_cdc_send(const uint8_t *data, size_t len);
+void usb_host_cdc_set_raw_rx_cb(usb_raw_rx_cb_t cb);
 
 void wifi_manager_init(void);
 bool wifi_is_connected(void);
 bool wifi_manager_is_ap_mode(void);
 
 void web_server_init(void);
+
+void tcp_bridge_init(void);
+bool tcp_bridge_client_connected(void);
 
 void spectrum_init(void);
 void spectrum_process_histogram_chunk(const uint8_t *data, size_t len);

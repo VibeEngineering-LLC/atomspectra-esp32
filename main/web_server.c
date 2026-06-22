@@ -23,6 +23,7 @@ static esp_err_t handle_status(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "wifi_connected", wifi_is_connected());
     cJSON_AddNumberToObject(root, "total_counts", sp->total_counts);
     cJSON_AddNumberToObject(root, "cpu_load", sp->cpu_load);
+    cJSON_AddBoolToObject(root, "tcp_client", tcp_bridge_client_connected());
 
     if (di->valid) {
         cJSON_AddNumberToObject(root, "dev", di->dev);

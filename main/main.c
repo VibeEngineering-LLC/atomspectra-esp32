@@ -27,6 +27,7 @@ void app_main(void)
     spectrum_init();
     usb_host_cdc_init();
     web_server_init();
+    tcp_bridge_init();
     init_sntp();
 
     ESP_LOGI(TAG, "All subsystems initialized");
@@ -34,9 +35,10 @@ void app_main(void)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
         const spectrum_data_t *sp = spectrum_get_current();
-        ESP_LOGI(TAG, "USB:%s WiFi:%s counts:%u cpu:%u%%",
+        ESP_LOGI(TAG, "USB:%s WiFi:%s TCP:%s counts:%u cpu:%u%%",
             usb_host_cdc_is_connected() ? "OK" : "--",
             wifi_is_connected() ? "OK" : "--",
+            tcp_bridge_client_connected() ? "OK" : "--",
             sp->total_counts, sp->cpu_load);
     }
 }

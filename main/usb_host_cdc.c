@@ -19,6 +19,8 @@ static shproto_struct s_rx_packet;
 static uint8_t s_tx_buf[256];
 static shproto_struct s_tx_packet;
 
+static usb_raw_rx_cb_t s_raw_rx_cb = NULL;
+
 static void handle_rx_packet(void)
 {
     switch (s_rx_packet.cmd) {
@@ -48,6 +50,8 @@ static void handle_rx_packet(void)
 
 static bool handle_rx(const uint8_t *data, size_t data_len, void *arg)
 {
+    if (s_raw_rx_cb) s_raw_rx_cb(data, data_len);
+
     for (size_t i = 0; i < data_len; i++) {
         shproto_byte_received(&s_rx_packet, data[i]);
         if (s_rx_packet.ready) {
@@ -173,4 +177,9 @@ int usb_host_cdc_send(const uint8_t *data, size_t len)
     esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, data, len, 1000);
     xSemaphoreGive(s_tx_mutex);
     return (err == ESP_OK) ? 0 : -1;
+}
+
+void usb_host_cdc_set_raw_rx_cb(usb_raw_rx_cb_t cb)
+{
+    s_raw_rx_cb = cb;
 }

@@ -12,6 +12,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_timer.h"
+#include "esp_littlefs.h"
 
 static const char *TAG = "web";
 
@@ -79,11 +82,14 @@ static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *s
         int len = snprintf(num, sizeof(num), "%s%u", (i > 0) ? "," : "", sp->bins[i]);
         httpd_resp_send_chunk(req, num, len);
     }
-    char tail[128];
+    char tail[320];
     snprintf(tail, sizeof(tail),
-        "],\"total\":%u,\"cpu\":%u,\"t1\":%.1f,\"t2\":%.1f,\"t3\":%.1f}",
-        sp->total_counts, sp->cpu_load,
-        sp->temperature[0], sp->temperature[1], sp->temperature[2]);
+        "],\"total\":%u,\"cpu\":%u,\"cps\":%u,\"lost\":%u,\"time\":%u,"
+        "\"t1\":%.1f,\"t2\":%.1f,\"t3\":%.1f,\"serial\":\"%s\"}",
+        sp->total_counts, sp->cpu_load, sp->cps, sp->lost_impulses,
+        sp->total_time_sec,
+        sp->temperature[0], sp->temperature[1], sp->temperature[2],
+        sp->serial_number[0] ? sp->serial_number : "");
     httpd_resp_sendstr_chunk(req, tail);
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
@@ -472,6 +478,87 @@ static esp_err_t handle_saved_delete(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handle_device(httpd_req_t *req)
+{
+    const device_info_t *di = spectrum_get_device_info();
+    const spectrum_data_t *sp = spectrum_get_current();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "valid", di->valid);
+    if (di->valid) {
+        cJSON_AddNumberToObject(root, "dev", di->dev);
+        cJSON_AddNumberToObject(root, "version", di->version);
+        cJSON_AddNumberToObject(root, "rise", di->rise);
+        cJSON_AddNumberToObject(root, "fall", di->fall);
+        cJSON_AddNumberToObject(root, "noise", di->noise);
+        cJSON_AddNumberToObject(root, "freq", di->freq);
+        cJSON_AddNumberToObject(root, "max_integral", di->max_integral);
+        cJSON_AddNumberToObject(root, "hyst", di->hyst);
+        cJSON_AddNumberToObject(root, "mode", di->mode);
+        cJSON_AddNumberToObject(root, "step", di->step);
+        cJSON_AddNumberToObject(root, "time", di->time_sec);
+        cJSON_AddNumberToObject(root, "pot", di->pot);
+        cJSON_AddNumberToObject(root, "t1", di->t1);
+        cJSON_AddNumberToObject(root, "t2", di->t2);
+        cJSON_AddNumberToObject(root, "t3", di->t3);
+        cJSON_AddBoolToObject(root, "tc_on", di->tc_on);
+        cJSON_AddNumberToObject(root, "tp", di->tp);
+    }
+    if (sp->serial_number[0])
+        cJSON_AddStringToObject(root, "serial", sp->serial_number);
+    if (sp->calib_valid) {
+        cJSON *cal = cJSON_CreateArray();
+        for (int i = 0; i <= sp->calib_order; i++)
+            cJSON_AddItemToArray(cal, cJSON_CreateNumber(sp->calibration[i]));
+        cJSON_AddItemToObject(root, "calibration", cal);
+        cJSON_AddNumberToObject(root, "calib_order", sp->calib_order);
+    }
+    char *json = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static esp_err_t handle_reboot_device(httpd_req_t *req)
+{
+    uint8_t pkt_buf[64];
+    shproto_struct pkt;
+    shproto_init(&pkt, pkt_buf, sizeof(pkt_buf));
+    shproto_packet_start(&pkt, CMD_REBOOT);
+    shproto_packet_complete(&pkt);
+    int ret = usb_host_cdc_send(pkt.data, pkt.len);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, ret == 0 ? "{\"ok\":true}" : "{\"ok\":false}");
+    return ESP_OK;
+}
+
+static esp_err_t handle_system(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
+    cJSON_AddNumberToObject(root, "min_free_heap", esp_get_minimum_free_heap_size());
+    cJSON_AddNumberToObject(root, "uptime_sec", (double)(esp_timer_get_time() / 1000000));
+    cJSON_AddBoolToObject(root, "usb_connected", usb_host_cdc_is_connected());
+    cJSON_AddBoolToObject(root, "wifi_connected", wifi_is_connected());
+    cJSON_AddBoolToObject(root, "tcp_client", tcp_bridge_client_connected());
+    size_t total = 0, used = 0;
+    esp_littlefs_info("storage", &total, &used);
+    cJSON_AddNumberToObject(root, "flash_total", (double)total);
+    cJSON_AddNumberToObject(root, "flash_used", (double)used);
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        cJSON_AddNumberToObject(root, "rssi", ap.rssi);
+        cJSON_AddStringToObject(root, "ssid", (char *)ap.ssid);
+    }
+    char *json = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
 static esp_err_t handle_wifi_reset(httpd_req_t *req)
 {
     nvs_handle_t nvs;
@@ -489,7 +576,7 @@ static esp_err_t handle_wifi_reset(httpd_req_t *req)
 void web_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = 24;
     config.stack_size = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -513,6 +600,9 @@ void web_server_init(void)
         {"/api/saved/*/export.csv",      HTTP_GET,  handle_saved_export_csv, NULL},
         {"/api/saved/*/spectrum.json",   HTTP_GET,  handle_saved_json,       NULL},
         {"/api/saved/*/delete",          HTTP_POST, handle_saved_delete,     NULL},
+        {"/api/device",                  HTTP_GET,  handle_device,           NULL},
+        {"/api/system",                  HTTP_GET,  handle_system,           NULL},
+        {"/api/reboot-device",           HTTP_POST, handle_reboot_device,    NULL},
         {"/api/wifi/reset",              HTTP_POST, handle_wifi_reset,       NULL},
         {"/",                            HTTP_GET,  handle_index,            NULL},
     };

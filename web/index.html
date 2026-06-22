@@ -34,6 +34,7 @@ a{color:#0f0}
 <button onclick="toggleLog()">Log</button>
 <button class="ovl" onclick="clearOverlay()" id="btn-clear-ovl" style="display:none">Clear Overlay</button>
 <span id="overlay-label"></span>
+<button onclick="rebootDevice()" style="border-color:#f44;color:#f44">Reboot Device</button>
 <button onclick="resetWifi()" style="border-color:#f80;color:#f80">WiFi Reset</button>
 <input id="cmd" placeholder="-inf" style="background:#222;color:#0f0;border:1px solid #0f0;padding:8px;width:200px">
 <button onclick="sendCmd()">Send</button>
@@ -66,7 +67,10 @@ async function update() {
         if (!r.ok) { document.getElementById("status").textContent = "No data"; return; }
         var d = await r.json();
         document.getElementById("status").textContent =
-            "Counts: " + d.total + " | CPU: " + d.cpu + "% | T1: " + d.t1 + "C | T2: " + d.t2 + "C | T3: " + d.t3 + "C";
+            (d.serial ? d.serial + " | " : "") +
+            "CPS: " + d.cps + " | " + d.total.toLocaleString() + " counts | " + fmtTime(d.time) +
+            " | CPU: " + d.cpu + "% | Lost: " + d.lost +
+            " | T: " + d.t1 + "/" + d.t2 + "/" + d.t3 + "C";
         var mx = 0;
         for (var i = 0; i < d.bins.length; i++) if (d.bins[i] > mx) mx = d.bins[i];
         if (overlayBins) for (var i = 0; i < overlayBins.length; i++) if (overlayBins[i] > mx) mx = overlayBins[i];
@@ -167,6 +171,11 @@ async function sendCmd() {
     setTimeout(update, 500);
 }
 function toggleLog() { logEl.style.display = logEl.style.display === "none" ? "block" : "none"; }
+async function rebootDevice() {
+    if (!confirm("Reboot the spectrometer?")) return;
+    await fetch("/api/reboot-device", {method:"POST"});
+    log("Reboot command sent");
+}
 async function resetWifi() {
     if (!confirm("Clear WiFi config and reboot into setup mode?")) return;
     await fetch("/api/wifi/reset", {method:"POST"});

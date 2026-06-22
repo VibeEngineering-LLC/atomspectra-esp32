@@ -16,7 +16,10 @@ Connects to the spectrometer via USB, acquires 8192-channel spectra in real time
 - **TCP bridge** on port 8234 — transparent serial-over-WiFi for BecqMoni/AtomSpectra PC software
 - **WiFi captive portal** for initial network setup
 - **SNTP** time synchronization for export timestamps
-- **Web UI** with live spectrum chart, device stats, text command interface
+- **Periodic device polling** — auto-requests calibration and temperatures every 30s
+- **Device reboot** via shproto CMD 0xF3
+- **System health API** — free heap, uptime, RSSI, flash usage
+- **Web UI** with live spectrum chart, CPS, duration, lost impulses, text command interface
 
 ## Hardware
 
@@ -69,6 +72,9 @@ Calibration coefficients header, metadata, 8192 channel counts. Open in InterSpe
 | `/api/saved/<N>/export.csv` | GET | Export saved spectrum as InterSpec CSV |
 | `/api/saved/<N>/spectrum.json` | GET | Saved spectrum as JSON |
 | `/api/saved/<N>/delete` | POST | Delete saved spectrum |
+| `/api/device` | GET | Full device info (settings, calibration, serial) |
+| `/api/system` | GET | ESP32 health (heap, uptime, RSSI, flash usage) |
+| `/api/reboot-device` | POST | Reboot spectrometer (CMD 0xF3) |
 | `/api/wifi/reset` | POST | Clear WiFi, reboot to setup |
 
 ## Project Structure

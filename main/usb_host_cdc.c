@@ -183,3 +183,15 @@ void usb_host_cdc_set_raw_rx_cb(usb_raw_rx_cb_t cb)
 {
     s_raw_rx_cb = cb;
 }
+
+int usb_host_send_text_command(const char *cmd)
+{
+    uint8_t pkt_buf[256];
+    shproto_struct pkt;
+    shproto_init(&pkt, pkt_buf, sizeof(pkt_buf));
+    shproto_packet_start(&pkt, CMD_TEXT);
+    while (*cmd) shproto_packet_add_data(&pkt, *cmd++);
+    shproto_packet_add_data(&pkt, '\0');
+    shproto_packet_complete(&pkt);
+    return usb_host_cdc_send(pkt.data, pkt.len);
+}

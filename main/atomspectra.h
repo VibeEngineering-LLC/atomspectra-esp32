@@ -67,6 +67,7 @@ void usb_host_cdc_init(void);
 bool usb_host_cdc_is_connected(void);
 int  usb_host_cdc_send(const uint8_t *data, size_t len);
 void usb_host_cdc_set_raw_rx_cb(usb_raw_rx_cb_t cb);
+int  usb_host_send_text_command(const char *cmd);
 
 void wifi_manager_init(void);
 bool wifi_is_connected(void);

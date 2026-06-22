@@ -1,6 +1,7 @@
 ﻿#include "atomspectra.h"
 #include "esp_log.h"
 #include "esp_sntp.h"
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -36,11 +37,11 @@ void app_main(void)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
         const spectrum_data_t *sp = spectrum_get_current();
-        ESP_LOGI(TAG, "USB:%s WiFi:%s TCP:%s counts:%u cpu:%u%%",
+        ESP_LOGI(TAG, "USB:%s WiFi:%s TCP:%s counts:%" PRIu32 " cpu:%u%%",
             usb_host_cdc_is_connected() ? "OK" : "--",
             wifi_is_connected() ? "OK" : "--",
             tcp_bridge_client_connected() ? "OK" : "--",
-            sp->total_counts, sp->cpu_load);
+            sp->total_counts, (unsigned)sp->cpu_load);
 
         if (usb_host_cdc_is_connected() && ++info_tick >= 3) {
             info_tick = 0;

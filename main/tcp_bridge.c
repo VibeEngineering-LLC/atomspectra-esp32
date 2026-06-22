@@ -1,6 +1,7 @@
 #include "atomspectra.h"
 #include "esp_log.h"
 #include "lwip/sockets.h"
+#include "lwip/inet.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
@@ -81,8 +82,7 @@ static void tcp_server_task(void *arg)
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
         s_client_fd = fd;
-        ESP_LOGI(TAG, "Client connected from " IPSTR,
-                 IP2STR((esp_ip4_addr_t *)&client_addr.sin_addr));
+        ESP_LOGI(TAG, "Client connected from %s", inet_ntoa(client_addr.sin_addr));
     }
 }
 

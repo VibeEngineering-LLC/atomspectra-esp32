@@ -5,6 +5,7 @@
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <time.h>
 #include <stddef.h>
@@ -79,12 +80,12 @@ static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *s
     httpd_resp_sendstr_chunk(req, "{\"bins\":[");
     char num[16];
     for (int i = 0; i < SPECTRUM_CHANNELS; i++) {
-        int len = snprintf(num, sizeof(num), "%s%u", (i > 0) ? "," : "", sp->bins[i]);
+        int len = snprintf(num, sizeof(num), "%s%" PRIu32, (i > 0) ? "," : "", sp->bins[i]);
         httpd_resp_send_chunk(req, num, len);
     }
     char tail[320];
     snprintf(tail, sizeof(tail),
-        "],\"total\":%u,\"cpu\":%u,\"cps\":%u,\"lost\":%u,\"time\":%u,"
+        "],\"total\":%"  PRIu32 ",\"cpu\":%u,\"cps\":%"  PRIu32 ",\"lost\":%"  PRIu32 ",\"time\":%"  PRIu32 ","
         "\"t1\":%.1f,\"t2\":%.1f,\"t3\":%.1f,\"serial\":\"%s\"}",
         sp->total_counts, sp->cpu_load, sp->cps, sp->lost_impulses,
         sp->total_time_sec,
@@ -173,7 +174,7 @@ static esp_err_t handle_list(httpd_req_t *req)
         fseek(f, offsetof(spectrum_data_t, saved_at), SEEK_SET);
         fread(&saved_at, sizeof(time_t), 1, f);
         fclose(f);
-        int n = snprintf(item, sizeof(item), "%s{\"index\":%d,\"counts\":%u,\"time\":%u,\"saved_at\":%ld}",
+        int n = snprintf(item, sizeof(item), "%s{\"index\":%d,\"counts\":%" PRIu32 ",\"time\":%" PRIu32 ",\"saved_at\":%ld}",
             count > 0 ? "," : "", i, counts, time_sec, (long)saved_at);
         httpd_resp_send_chunk(req, item, n);
         count++;
@@ -272,9 +273,9 @@ static esp_err_t render_spectrum_xml(httpd_req_t *req, const spectrum_data_t *sp
         live_time *= (1.0f - (float)sp->cpu_load / 10000.0f);
 
     n = snprintf(buf, 4096,
-        "        <ValidPulseCount>%u</ValidPulseCount>\r\n"
-        "        <TotalPulseCount>%u</TotalPulseCount>\r\n"
-        "        <MeasurementTime>%u</MeasurementTime>\r\n"
+        "        <ValidPulseCount>%" PRIu32 "</ValidPulseCount>\r\n"
+        "        <TotalPulseCount>%" PRIu32 "</TotalPulseCount>\r\n"
+        "        <MeasurementTime>%" PRIu32 "</MeasurementTime>\r\n"
         "        <LiveTime>%.1f</LiveTime>\r\n"
         "        <NumberOfSamples>1</NumberOfSamples>\r\n"
         "        <Spectrum>\r\n",
@@ -287,7 +288,7 @@ static esp_err_t render_spectrum_xml(httpd_req_t *req, const spectrum_data_t *sp
         int pos = 0;
         for (int j = 0; j < 80 && i < SPECTRUM_CHANNELS; j++, i++) {
             pos += snprintf(buf + pos, 4096 - pos,
-                "          <DataPoint>%u</DataPoint>\r\n", sp->bins[i]);
+                "          <DataPoint>%" PRIu32 "</DataPoint>\r\n", sp->bins[i]);
         }
         httpd_resp_send_chunk(req, buf, pos);
     }
@@ -350,7 +351,7 @@ static esp_err_t render_spectrum_csv(httpd_req_t *req, const spectrum_data_t *sp
 
     n = snprintf(buf, 4096,
         "livetime: %.1f\n"
-        "realtime: %u\n"
+        "realtime: %" PRIu32 "\n"
         "detectorname: Atom Spectra\n"
         "SerialNumber: %s\n"
         "starttime: %04d-%02d-%02dT%02d:%02d:%02d\n",
@@ -363,7 +364,7 @@ static esp_err_t render_spectrum_csv(httpd_req_t *req, const spectrum_data_t *sp
     for (int i = 0; i < SPECTRUM_CHANNELS; ) {
         int pos = 0;
         for (int j = 0; j < 200 && i < SPECTRUM_CHANNELS; j++, i++) {
-            pos += snprintf(buf + pos, 4096 - pos, "%d, %u\n", i + 1, sp->bins[i]);
+            pos += snprintf(buf + pos, 4096 - pos, "%d, %" PRIu32 "\n", i + 1, sp->bins[i]);
         }
         httpd_resp_send_chunk(req, buf, pos);
     }

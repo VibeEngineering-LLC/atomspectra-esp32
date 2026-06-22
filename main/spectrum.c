@@ -1,5 +1,6 @@
 ﻿#include "atomspectra.h"
 #include "esp_log.h"
+#include <inttypes.h>
 #include "esp_littlefs.h"
 #include <string.h>
 #include <stdio.h>
@@ -20,7 +21,6 @@ void spectrum_init(void)
         .base_path = STORAGE_PATH,
         .partition_label = "storage",
         .format_if_mount_failed = true,
-        .max_files = 5,
     };
     esp_err_t ret = esp_vfs_littlefs_register(&conf);
     if (ret != ESP_OK) {
@@ -28,7 +28,7 @@ void spectrum_init(void)
     } else {
         size_t total = 0, used = 0;
         esp_littlefs_info("storage", &total, &used);
-        ESP_LOGI(TAG, "LittleFS: total=%u used=%u free=%u", total, used, total - used);
+        ESP_LOGI(TAG, "LittleFS: total=%zu used=%zu free=%zu", total, used, total - used);
     }
 }
 
@@ -91,7 +91,7 @@ void spectrum_process_info_response(const char *text)
         uint32_t ce = (uint32_t)strtoul(lbuf[10], NULL, 16);
         if (cc == ce) {
             for (int c = 0; c < CALIB_COEFFS && (c*2+1) < 10; c++) {
-                char pair[32];
+                char pair[128];
                 snprintf(pair, sizeof(pair), "%s%s", lbuf[c*2], lbuf[c*2+1]);
                 uint64_t raw = strtoull(pair, NULL, 16);
                 double val;
@@ -172,7 +172,7 @@ int spectrum_save_to_flash(void)
     if (!f) { ESP_LOGE(TAG, "Cannot create %s", path); return -1; }
     fwrite(&s_spectrum, sizeof(s_spectrum), 1, f);
     fclose(f);
-    ESP_LOGI(TAG, "Saved spectrum to %s (%u counts)", path, s_spectrum.total_counts);
+    ESP_LOGI(TAG, "Saved spectrum to %s (%" PRIu32 " counts)", path, s_spectrum.total_counts);
     return idx;
 }
 

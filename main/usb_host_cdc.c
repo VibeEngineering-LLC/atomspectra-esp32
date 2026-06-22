@@ -1,6 +1,7 @@
 #include "atomspectra.h"
 #include "shproto.h"
 #include "esp_log.h"
+#include <inttypes.h>
 #include "usb/cdc_acm_host.h"
 #include "usb/usb_host.h"
 #include "freertos/FreeRTOS.h"
@@ -43,7 +44,7 @@ static void handle_rx_packet(void)
     case CMD_OSCILLOSCOPE:
         break;
     default:
-        ESP_LOGW(TAG, "Unknown cmd 0x%02x len=%u", s_rx_packet.cmd, s_rx_packet.len);
+        ESP_LOGW(TAG, "Unknown cmd 0x%02x len=%u", (unsigned)s_rx_packet.cmd, (unsigned)s_rx_packet.len);
         break;
     }
 }

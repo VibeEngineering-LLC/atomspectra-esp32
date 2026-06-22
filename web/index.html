@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <title>AtomSpectra Gateway</title>
 <style>
@@ -6,9 +6,17 @@ body{font-family:monospace;background:#111;color:#0f0;margin:20px}
 canvas{border:1px solid #0f0;display:block;margin:10px 0}
 button{background:#222;color:#0f0;border:1px solid #0f0;padding:8px 16px;cursor:pointer;margin:4px}
 button:hover{background:#0f0;color:#111}
+button.del{border-color:#f44;color:#f44}
+button.del:hover{background:#f44;color:#111}
 .info{color:#0a0;font-size:14px;margin:8px 0}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 #log{color:#080;font-size:12px;max-height:120px;overflow-y:auto;white-space:pre;margin-top:8px}
+h2{color:#0c0;margin:20px 0 8px;border-top:1px solid #040;padding-top:12px}
+table{border-collapse:collapse;margin:8px 0}
+th,td{border:1px solid #040;padding:6px 12px;text-align:left}
+th{color:#0c0}
+a{color:#0f0}
+.empty{color:#060;font-style:italic}
 </style></head>
 <body>
 <h1>AtomSpectra Gateway</h1>
@@ -27,6 +35,9 @@ button:hover{background:#0f0;color:#111}
 </div>
 <pre id="log" style="display:none"></pre>
 
+<h2>Saved Spectra</h2>
+<div id="saved"><span class="empty">Loading...</span></div>
+
 <script>
 var C = document.getElementById("sp");
 var X = C.getContext("2d");
@@ -35,6 +46,11 @@ var logEl = document.getElementById("log");
 function log(msg) {
     logEl.textContent += msg + "\n";
     logEl.scrollTop = logEl.scrollHeight;
+}
+
+function fmtTime(s) {
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+    return (h > 0 ? h + "h " : "") + (m > 0 ? m + "m " : "") + ss + "s";
 }
 
 async function update() {
@@ -57,10 +73,39 @@ async function update() {
     } catch(e) { document.getElementById("status").textContent = "Error: " + e; }
 }
 
+async function loadSaved() {
+    var el = document.getElementById("saved");
+    try {
+        var r = await (await fetch("/api/list")).json();
+        if (!r.spectra || r.spectra.length === 0) {
+            el.innerHTML = '<span class="empty">No saved spectra</span>';
+            return;
+        }
+        var html = '<table><tr><th>#</th><th>Counts</th><th>Duration</th><th>Export</th><th></th></tr>';
+        for (var i = 0; i < r.spectra.length; i++) {
+            var s = r.spectra[i];
+            html += '<tr><td>' + s.index + '</td><td>' + s.counts.toLocaleString() + '</td><td>' + fmtTime(s.time) + '</td>' +
+                '<td><a href="/api/saved/' + s.index + '/export.xml">XML</a> | ' +
+                '<a href="/api/saved/' + s.index + '/export.csv">CSV</a></td>' +
+                '<td><button class="del" onclick="delSaved(' + s.index + ')">Del</button></td></tr>';
+        }
+        html += '</table>';
+        el.innerHTML = html;
+    } catch(e) { el.innerHTML = '<span class="empty">Error: ' + e + '</span>'; }
+}
+
+async function delSaved(idx) {
+    if (!confirm("Delete saved spectrum #" + idx + "?")) return;
+    await fetch("/api/saved/" + idx + "/delete", {method:"POST"});
+    log("Deleted #" + idx);
+    loadSaved();
+}
+
 async function resetSpectrum() { await fetch("/api/reset", {method:"POST"}); log("Reset sent"); update(); }
 async function saveSpectrum() {
     var r = await (await fetch("/api/save", {method:"POST"})).json();
     log(r.ok ? "Saved #" + r.index : "Save error");
+    if (r.ok) loadSaved();
 }
 async function requestInfo() { await fetch("/api/command", {method:"POST", body:"-inf"}); log("Info requested"); setTimeout(update, 500); }
 async function sendCmd() {
@@ -80,5 +125,6 @@ async function resetWifi() {
 document.getElementById("cmd").addEventListener("keydown", function(e) { if (e.key === "Enter") sendCmd(); });
 setInterval(update, 1000);
 update();
+loadSaved();
 </script>
 </body></html>

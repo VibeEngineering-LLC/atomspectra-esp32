@@ -201,3 +201,12 @@ int spectrum_load_from_flash(int index, spectrum_data_t *out)
     fclose(f);
     return (rd == sizeof(*out)) ? 0 : -1;
 }
+
+int spectrum_delete_from_flash(int index)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "%s/spec_%04d.bin", STORAGE_PATH, index);
+    if (remove(path) != 0) return -1;
+    ESP_LOGI(TAG, "Deleted %s", path);
+    return 0;
+}

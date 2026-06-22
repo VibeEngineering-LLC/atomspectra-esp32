@@ -59,12 +59,16 @@ Calibration coefficients header, metadata, 8192 channel counts. Open in InterSpe
 | `/api/status` | GET | Device status JSON |
 | `/api/spectrum.json` | GET | Live spectrum + stats |
 | `/api/spectrum` | GET | Raw binary (32768 bytes) |
-| `/api/export.xml` | GET | BecqMoni XML download |
-| `/api/export.csv` | GET | InterSpec CSV download |
+| `/api/export.xml` | GET | BecqMoni XML download (live) |
+| `/api/export.csv` | GET | InterSpec CSV download (live) |
 | `/api/command` | POST | Send text command to device |
 | `/api/reset` | POST | Reset spectrum counters |
 | `/api/save` | POST | Save spectrum to flash |
-| `/api/list` | GET | List saved spectra |
+| `/api/list` | GET | List saved spectra (JSON with metadata) |
+| `/api/saved/<N>/export.xml` | GET | Export saved spectrum as BecqMoni XML |
+| `/api/saved/<N>/export.csv` | GET | Export saved spectrum as InterSpec CSV |
+| `/api/saved/<N>/spectrum.json` | GET | Saved spectrum as JSON |
+| `/api/saved/<N>/delete` | POST | Delete saved spectrum |
 | `/api/wifi/reset` | POST | Clear WiFi, reboot to setup |
 
 ## Project Structure

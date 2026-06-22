@@ -5,13 +5,24 @@
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
+#include <stddef.h>
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
 
 static const char *TAG = "web";
+
+#define STORAGE_PATH "/sto" "rage"
+
+static int parse_saved_index(const char *uri)
+{
+    const char *p = strstr(uri, "/api/saved/");
+    if (!p) return -1;
+    return atoi(p + 11);
+}
 
 static esp_err_t handle_status(httpd_req_t *req)
 {
@@ -59,13 +70,8 @@ static esp_err_t handle_spectrum(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t handle_spectrum_json(httpd_req_t *req)
+static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *sp)
 {
-    const spectrum_data_t *sp = spectrum_get_current();
-    if (!sp->valid) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data yet");
-        return ESP_FAIL;
-    }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"bins\":[");
     char num[16];
@@ -81,6 +87,16 @@ static esp_err_t handle_spectrum_json(httpd_req_t *req)
     httpd_resp_sendstr_chunk(req, tail);
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
+}
+
+static esp_err_t handle_spectrum_json(httpd_req_t *req)
+{
+    const spectrum_data_t *sp = spectrum_get_current();
+    if (!sp->valid) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data yet");
+        return ESP_FAIL;
+    }
+    return render_spectrum_json(req, sp);
 }
 
 static esp_err_t handle_command(httpd_req_t *req)
@@ -135,12 +151,28 @@ static esp_err_t handle_save(httpd_req_t *req)
 
 static esp_err_t handle_list(httpd_req_t *req)
 {
-    char buf[4096] = {0};
-    int count = spectrum_list_saved(buf, sizeof(buf));
-    char resp[4200];
-    snprintf(resp, sizeof(resp), "{\"count\":%d,\"files\":\"%s\"}", count, buf);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, resp);
+    httpd_resp_sendstr_chunk(req, "{\"spectra\":[");
+    char path[64], item[128];
+    int count = 0;
+    for (int i = 0; i < 9999; i++) {
+        snprintf(path, sizeof(path), "%s/spec_%04d.bin", STORAGE_PATH, i);
+        FILE *f = fopen(path, "rb");
+        if (!f) continue;
+        uint32_t counts = 0, time_sec = 0;
+        fseek(f, offsetof(spectrum_data_t, total_counts), SEEK_SET);
+        fread(&counts, 4, 1, f);
+        fread(&time_sec, 4, 1, f);
+        fclose(f);
+        int n = snprintf(item, sizeof(item), "%s{\"index\":%d,\"counts\":%u,\"time\":%u}",
+            count > 0 ? "," : "", i, counts, time_sec);
+        httpd_resp_send_chunk(req, item, n);
+        count++;
+    }
+    char tail[32];
+    int n = snprintf(tail, sizeof(tail), "],\"count\":%d}", count);
+    httpd_resp_send_chunk(req, tail, n);
+    httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }
 
@@ -153,20 +185,17 @@ static esp_err_t handle_index(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t handle_export_xml(httpd_req_t *req)
+static esp_err_t render_spectrum_xml(httpd_req_t *req, const spectrum_data_t *sp, const char *filename)
 {
-    const spectrum_data_t *sp = spectrum_get_current();
-    if (!sp->valid) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data");
-        return ESP_FAIL;
-    }
     char *buf = malloc(4096);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "application/xml");
-    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"spectrum.xml\"");
+    char disp[80];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"%s\"", filename);
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
 
     httpd_resp_sendstr_chunk(req,
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
@@ -278,20 +307,17 @@ static esp_err_t handle_export_xml(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t handle_export_csv(httpd_req_t *req)
+static esp_err_t render_spectrum_csv(httpd_req_t *req, const spectrum_data_t *sp, const char *filename)
 {
-    const spectrum_data_t *sp = spectrum_get_current();
-    if (!sp->valid) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data");
-        return ESP_FAIL;
-    }
     char *buf = malloc(4096);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "text/csv");
-    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"spectrum.csv\"");
+    char disp[80];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"%s\"", filename);
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
 
     if (sp->calib_valid) {
         int pos = snprintf(buf, 4096, "calibcoeff:");
@@ -340,6 +366,111 @@ static esp_err_t handle_export_csv(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handle_export_xml(httpd_req_t *req)
+{
+    const spectrum_data_t *sp = spectrum_get_current();
+    if (!sp->valid) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data");
+        return ESP_FAIL;
+    }
+    return render_spectrum_xml(req, sp, "spectrum.xml");
+}
+
+static esp_err_t handle_export_csv(httpd_req_t *req)
+{
+    const spectrum_data_t *sp = spectrum_get_current();
+    if (!sp->valid) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data");
+        return ESP_FAIL;
+    }
+    return render_spectrum_csv(req, sp, "spectrum.csv");
+}
+
+static esp_err_t handle_saved_export_xml(httpd_req_t *req)
+{
+    int idx = parse_saved_index(req->uri);
+    if (idx < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad index");
+        return ESP_FAIL;
+    }
+    spectrum_data_t *sp = malloc(sizeof(spectrum_data_t));
+    if (!sp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (spectrum_load_from_flash(idx, sp) != 0) {
+        free(sp);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Spectrum not found");
+        return ESP_FAIL;
+    }
+    char fn[32];
+    snprintf(fn, sizeof(fn), "spectrum_%04d.xml", idx);
+    esp_err_t ret = render_spectrum_xml(req, sp, fn);
+    free(sp);
+    return ret;
+}
+
+static esp_err_t handle_saved_export_csv(httpd_req_t *req)
+{
+    int idx = parse_saved_index(req->uri);
+    if (idx < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad index");
+        return ESP_FAIL;
+    }
+    spectrum_data_t *sp = malloc(sizeof(spectrum_data_t));
+    if (!sp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (spectrum_load_from_flash(idx, sp) != 0) {
+        free(sp);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Spectrum not found");
+        return ESP_FAIL;
+    }
+    char fn[32];
+    snprintf(fn, sizeof(fn), "spectrum_%04d.csv", idx);
+    esp_err_t ret = render_spectrum_csv(req, sp, fn);
+    free(sp);
+    return ret;
+}
+
+static esp_err_t handle_saved_json(httpd_req_t *req)
+{
+    int idx = parse_saved_index(req->uri);
+    if (idx < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad index");
+        return ESP_FAIL;
+    }
+    spectrum_data_t *sp = malloc(sizeof(spectrum_data_t));
+    if (!sp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (spectrum_load_from_flash(idx, sp) != 0) {
+        free(sp);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Spectrum not found");
+        return ESP_FAIL;
+    }
+    esp_err_t ret = render_spectrum_json(req, sp);
+    free(sp);
+    return ret;
+}
+
+static esp_err_t handle_saved_delete(httpd_req_t *req)
+{
+    int idx = parse_saved_index(req->uri);
+    if (idx < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad index");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    if (spectrum_delete_from_flash(idx) == 0)
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+    else
+        httpd_resp_sendstr(req, "{\"ok\":false}");
+    return ESP_OK;
+}
+
 static esp_err_t handle_wifi_reset(httpd_req_t *req)
 {
     nvs_handle_t nvs;
@@ -357,7 +488,7 @@ static esp_err_t handle_wifi_reset(httpd_req_t *req)
 void web_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.stack_size = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -368,17 +499,21 @@ void web_server_init(void)
     }
 
     const httpd_uri_t uris[] = {
-        {"/",                  HTTP_GET,  handle_index,         NULL},
-        {"/api/status",        HTTP_GET,  handle_status,        NULL},
-        {"/api/spectrum",      HTTP_GET,  handle_spectrum,      NULL},
-        {"/api/spectrum.json", HTTP_GET,  handle_spectrum_json, NULL},
-        {"/api/command",       HTTP_POST, handle_command,       NULL},
-        {"/api/reset",         HTTP_POST, handle_reset,         NULL},
-        {"/api/save",          HTTP_POST, handle_save,          NULL},
-        {"/api/list",          HTTP_GET,  handle_list,          NULL},
-        {"/api/export.xml",    HTTP_GET,  handle_export_xml,    NULL},
-        {"/api/export.csv",    HTTP_GET,  handle_export_csv,    NULL},
-        {"/api/wifi/reset",    HTTP_POST, handle_wifi_reset,    NULL},
+        {"/api/status",                  HTTP_GET,  handle_status,           NULL},
+        {"/api/spectrum",                HTTP_GET,  handle_spectrum,         NULL},
+        {"/api/spectrum.json",           HTTP_GET,  handle_spectrum_json,    NULL},
+        {"/api/command",                 HTTP_POST, handle_command,          NULL},
+        {"/api/reset",                   HTTP_POST, handle_reset,            NULL},
+        {"/api/save",                    HTTP_POST, handle_save,             NULL},
+        {"/api/list",                    HTTP_GET,  handle_list,             NULL},
+        {"/api/export.xml",              HTTP_GET,  handle_export_xml,       NULL},
+        {"/api/export.csv",              HTTP_GET,  handle_export_csv,       NULL},
+        {"/api/saved/*/export.xml",      HTTP_GET,  handle_saved_export_xml, NULL},
+        {"/api/saved/*/export.csv",      HTTP_GET,  handle_saved_export_csv, NULL},
+        {"/api/saved/*/spectrum.json",   HTTP_GET,  handle_saved_json,       NULL},
+        {"/api/saved/*/delete",          HTTP_POST, handle_saved_delete,     NULL},
+        {"/api/wifi/reset",              HTTP_POST, handle_wifi_reset,       NULL},
+        {"/",                            HTTP_GET,  handle_index,            NULL},
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++)

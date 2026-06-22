@@ -8,9 +8,12 @@ button{background:#222;color:#0f0;border:1px solid #0f0;padding:8px 16px;cursor:
 button:hover{background:#0f0;color:#111}
 button.del{border-color:#f44;color:#f44}
 button.del:hover{background:#f44;color:#111}
+button.ovl{border-color:#fa0;color:#fa0}
+button.ovl:hover{background:#fa0;color:#111}
 .info{color:#0a0;font-size:14px;margin:8px 0}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 #log{color:#080;font-size:12px;max-height:120px;overflow-y:auto;white-space:pre;margin-top:8px}
+#overlay-label{color:#fa0;font-size:13px;margin-left:8px}
 h2{color:#0c0;margin:20px 0 8px;border-top:1px solid #040;padding-top:12px}
 table{border-collapse:collapse;margin:8px 0}
 th,td{border:1px solid #040;padding:6px 12px;text-align:left}
@@ -29,6 +32,8 @@ a{color:#0f0}
 <button onclick="location.href='/api/export.csv'">Export CSV</button>
 <button onclick="requestInfo()">Info</button>
 <button onclick="toggleLog()">Log</button>
+<button class="ovl" onclick="clearOverlay()" id="btn-clear-ovl" style="display:none">Clear Overlay</button>
+<span id="overlay-label"></span>
 <button onclick="resetWifi()" style="border-color:#f80;color:#f80">WiFi Reset</button>
 <input id="cmd" placeholder="-inf" style="background:#222;color:#0f0;border:1px solid #0f0;padding:8px;width:200px">
 <button onclick="sendCmd()">Send</button>
@@ -42,6 +47,8 @@ a{color:#0f0}
 var C = document.getElementById("sp");
 var X = C.getContext("2d");
 var logEl = document.getElementById("log");
+var overlayBins = null;
+var overlayIdx = -1;
 
 function log(msg) {
     logEl.textContent += msg + "\n";
@@ -62,15 +69,55 @@ async function update() {
             "Counts: " + d.total + " | CPU: " + d.cpu + "% | T1: " + d.t1 + "C | T2: " + d.t2 + "C | T3: " + d.t3 + "C";
         var mx = 0;
         for (var i = 0; i < d.bins.length; i++) if (d.bins[i] > mx) mx = d.bins[i];
+        if (overlayBins) for (var i = 0; i < overlayBins.length; i++) if (overlayBins[i] > mx) mx = overlayBins[i];
         if (mx < 1) mx = 1;
         X.fillStyle = "#111"; X.fillRect(0, 0, 1200, 400);
-        X.fillStyle = "#0f0";
         var bw = 1200.0 / d.bins.length;
+        if (overlayBins) {
+            X.fillStyle = "rgba(255,170,0,0.3)";
+            for (var i = 0; i < overlayBins.length; i++) {
+                var h = overlayBins[i] / mx * 380;
+                X.fillRect(i * bw, 400 - h, Math.max(bw - 0.3, 0.3), h);
+            }
+        }
+        X.fillStyle = overlayBins ? "rgba(0,255,0,0.7)" : "#0f0";
         for (var i = 0; i < d.bins.length; i++) {
             var h = d.bins[i] / mx * 380;
             X.fillRect(i * bw, 400 - h, Math.max(bw - 0.3, 0.3), h);
         }
+        if (overlayBins) {
+            X.strokeStyle = "#fa0";
+            X.lineWidth = 1;
+            X.beginPath();
+            for (var i = 0; i < overlayBins.length; i++) {
+                var px = i * bw + bw / 2;
+                var py = 400 - overlayBins[i] / mx * 380;
+                if (i === 0) X.moveTo(px, py); else X.lineTo(px, py);
+            }
+            X.stroke();
+        }
     } catch(e) { document.getElementById("status").textContent = "Error: " + e; }
+}
+
+async function loadOverlay(idx) {
+    try {
+        var r = await (await fetch("/api/saved/" + idx + "/spectrum.json")).json();
+        overlayBins = r.bins;
+        overlayIdx = idx;
+        document.getElementById("overlay-label").textContent = "Overlay: #" + idx;
+        document.getElementById("btn-clear-ovl").style.display = "";
+        log("Overlay loaded: #" + idx);
+        update();
+    } catch(e) { log("Overlay error: " + e); }
+}
+
+function clearOverlay() {
+    overlayBins = null;
+    overlayIdx = -1;
+    document.getElementById("overlay-label").textContent = "";
+    document.getElementById("btn-clear-ovl").style.display = "none";
+    log("Overlay cleared");
+    update();
 }
 
 async function loadSaved() {
@@ -85,10 +132,12 @@ async function loadSaved() {
         for (var i = 0; i < r.spectra.length; i++) {
             var s = r.spectra[i];
             var dt = s.saved_at > 0 ? new Date(s.saved_at * 1000).toLocaleString() : '—';
-            html += '<tr><td>' + s.index + '</td><td>' + dt + '</td><td>' + s.counts.toLocaleString() + '</td><td>' + fmtTime(s.time) + '</td>' +
+            var isActive = (s.index === overlayIdx) ? ' style="background:#330"' : '';
+            html += '<tr' + isActive + '><td>' + s.index + '</td><td>' + dt + '</td><td>' + s.counts.toLocaleString() + '</td><td>' + fmtTime(s.time) + '</td>' +
                 '<td><a href="/api/saved/' + s.index + '/export.xml">XML</a> | ' +
                 '<a href="/api/saved/' + s.index + '/export.csv">CSV</a></td>' +
-                '<td><button class="del" onclick="delSaved(' + s.index + ')">Del</button></td></tr>';
+                '<td><button class="ovl" onclick="loadOverlay(' + s.index + ')">Overlay</button> ' +
+                '<button class="del" onclick="delSaved(' + s.index + ')">Del</button></td></tr>';
         }
         html += '</table>';
         el.innerHTML = html;
@@ -99,6 +148,7 @@ async function delSaved(idx) {
     if (!confirm("Delete saved spectrum #" + idx + "?")) return;
     await fetch("/api/saved/" + idx + "/delete", {method:"POST"});
     log("Deleted #" + idx);
+    if (overlayIdx === idx) clearOverlay();
     loadSaved();
 }
 

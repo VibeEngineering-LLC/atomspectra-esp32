@@ -104,6 +104,7 @@ Web UI открывается в браузере по адресу `http://<IP-
 - Драйвер CH343 (если на плате CH343 USB-UART: [WCH driver](https://www.wch-ic.com/downloads/CH343SER_ZIP.html))
 
 > Подробная установка с нуля — в [`INSTALL.md`](INSTALL.md).
+> Известные проблемы и ограничения — в [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
 
 ## Быстрый старт (5 минут)
 
@@ -203,6 +204,7 @@ atomspectra-esp32/
 ├── sdkconfig.defaults         конфиг ESP32-S3 USB OTG
 ├── CMakeLists.txt
 ├── INSTALL.md                 подробная инструкция установки
+├── KNOWN_ISSUES.md            известные проблемы и ограничения
 ├── LICENSE                    MIT
 └── README.md                  этот файл
 ```

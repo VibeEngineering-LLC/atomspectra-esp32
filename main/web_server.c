@@ -76,31 +76,40 @@ static esp_err_t handle_spectrum(httpd_req_t *req)
 
 static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *sp)
 {
+    char *buf = malloc(4096);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"bins\":[");
-    char num[16];
+    int pos = 0;
     for (int i = 0; i < SPECTRUM_CHANNELS; i++) {
-        int len = snprintf(num, sizeof(num), "%s%" PRIu32, (i > 0) ? "," : "", sp->bins[i]);
-        httpd_resp_send_chunk(req, num, len);
+        pos += snprintf(buf + pos, 4096 - pos, "%s%" PRIu32, (i > 0) ? "," : "", sp->bins[i]);
+        if (pos > 3800) {
+            httpd_resp_send_chunk(req, buf, pos);
+            pos = 0;
+        }
     }
-    char tail[320];
-    snprintf(tail, sizeof(tail),
-        "],\"total\":%"  PRIu32 ",\"cpu\":%u,\"cps\":%"  PRIu32 ",\"lost\":%"  PRIu32 ",\"time\":%"  PRIu32 ","
+    if (pos > 0) httpd_resp_send_chunk(req, buf, pos);
+    int n = snprintf(buf, 4096,
+        "],\"total\":%" PRIu32 ",\"cpu\":%u,\"cps\":%" PRIu32 ",\"lost\":%" PRIu32 ",\"time\":%" PRIu32 ","
         "\"t1\":%.1f,\"t2\":%.1f,\"t3\":%.1f,\"serial\":\"%s\"",
         sp->total_counts, sp->cpu_load, sp->cps, sp->lost_impulses,
         sp->total_time_sec,
         sp->temperature[0], sp->temperature[1], sp->temperature[2],
         sp->serial_number[0] ? sp->serial_number : "");
-    httpd_resp_sendstr_chunk(req, tail);
+    httpd_resp_send_chunk(req, buf, n);
     if (sp->calib_valid) {
-        char cal[256]; int p = snprintf(cal,sizeof(cal),",\"calib\":[");
-        for (int i=0; i<=sp->calib_order; i++)
-            p += snprintf(cal+p,sizeof(cal)-p,"%s%.15g",i?",":"",sp->calibration[i]);
-        snprintf(cal+p,sizeof(cal)-p,"]");
-        httpd_resp_sendstr_chunk(req, cal);
+        int p = snprintf(buf, 4096, ",\"calib\":[");
+        for (int i = 0; i <= sp->calib_order; i++)
+            p += snprintf(buf + p, 4096 - p, "%s%.15g", i ? "," : "", sp->calibration[i]);
+        snprintf(buf + p, 4096 - p, "]");
+        httpd_resp_sendstr_chunk(req, buf);
     }
     httpd_resp_sendstr_chunk(req, "}");
     httpd_resp_send_chunk(req, NULL, 0);
+    free(buf);
     return ESP_OK;
 }
 
@@ -169,11 +178,12 @@ static esp_err_t handle_list(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"spectra\":[");
     char path[64], item[160];
-    int count = 0;
-    for (int i = 0; i < 9999; i++) {
+    int count = 0, misses = 0;
+    for (int i = 0; i < 9999 && misses < 20; i++) {
         snprintf(path, sizeof(path), "%s/spec_%04d.bin", STORAGE_PATH, i);
         FILE *f = fopen(path, "rb");
-        if (!f) continue;
+        if (!f) { misses++; continue; }
+        misses = 0;
         uint32_t counts = 0, time_sec = 0;
         time_t saved_at = 0;
         fseek(f, offsetof(spectrum_data_t, total_counts), SEEK_SET);
@@ -304,13 +314,6 @@ static esp_err_t render_spectrum_xml(httpd_req_t *req, const spectrum_data_t *sp
     httpd_resp_sendstr_chunk(req,
         "        </Spectrum>\r\n"
         "      </EnergySpectrum>\r\n"
-        "      <BackgroundEnergySpectrum>\r\n"
-        "        <NumberOfChannels>0</NumberOfChannels>\r\n"
-        "        <ChannelPitch>1</ChannelPitch>\r\n"
-        "        <MeasurementTime>0</MeasurementTime>\r\n"
-        "        <NumberOfSamples>0</NumberOfSamples>\r\n"
-        "        <Spectrum />\r\n"
-        "      </BackgroundEnergySpectrum>\r\n"
         "      <PulseCollection>\r\n"
         "        <Format>Base64 encoded binary</Format>\r\n"
         "        <Pulses />\r\n"
@@ -671,7 +674,7 @@ void web_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 24;
-    config.stack_size = 8192;
+    config.stack_size = 12288;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
     httpd_handle_t server = NULL;

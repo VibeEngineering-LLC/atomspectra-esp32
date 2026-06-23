@@ -107,6 +107,10 @@ var overlayBins=null,overlayIdx=-1;
 var isLog=false,isCps=false,isKev=false;
 var calib=null,lastD=null,calibEditing=false;
 var PL=65,PT=15,PW=1120,PH=340,PR=PL+PW,PB=PT+PH;
+var csrfToken="";
+
+async function loadCsrf(){try{var r=await(await fetch("/api/csrf-token")).json();csrfToken=r.token||""}catch(e){}}
+function post(url,opts){opts=opts||{};opts.method="POST";opts.headers=Object.assign({},opts.headers||{},{"X-CSRF-Token":csrfToken});return fetch(url,opts)}
 
 function lg(m){logEl.textContent+=m+"\n";logEl.scrollTop=logEl.scrollHeight}
 function fmtTime(s){var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;return(h>0?h+"h ":"")+(m>0?m+"m ":"")+ss+"s"}
@@ -226,7 +230,7 @@ async function applyCalib(){
  var a=parseFloat(document.getElementById("cal-a").value)||0;
  var coeffs=[e,d,c,b,a];
  try{
-  var r=await fetch("/api/calibration",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coeffs:coeffs})});
+  var r=await post("/api/calibration",{headers:{"Content-Type":"application/json"},body:JSON.stringify({coeffs:coeffs})});
   if(r.ok){calibEditing=false;calib=coeffs;document.getElementById("calib-status").textContent="Применена";document.getElementById("calib-status").style.color="#0f0";lg("Calibration: ["+coeffs.join(", ")+"]");if(lastD)draw(lastD)}
   else{document.getElementById("calib-status").textContent="Ошибка";document.getElementById("calib-status").style.color="#f44"}
  }catch(err){lg("Calibration error: "+err)}
@@ -270,17 +274,17 @@ async function loadSaved(){
   el.innerHTML=html+'</table>';
  }catch(e){el.innerHTML='<span class="empty">Error: '+e+'</span>'}
 }
-async function delSaved(idx){if(!confirm("Удалить спектр #"+idx+"?"))return;await fetch("/api/saved/"+idx+"/delete",{method:"POST"});lg("Deleted #"+idx);if(overlayIdx===idx)clearOverlay();loadSaved();loadFlashInfo()}
-async function startAcq(){await fetch("/api/command",{method:"POST",body:"-sta"});lg("Start sent")}
-async function stopAcq(){await fetch("/api/command",{method:"POST",body:"-sto"});lg("Stop sent")}
-async function resetSpectrum(){clearCanvas();lastD=null;document.getElementById("big-time").textContent="00:00:00";document.getElementById("big-cps").textContent="0";document.getElementById("big-total").textContent="0";await fetch("/api/reset",{method:"POST"});lg("Reset sent")}
-async function saveSpectrum(){var r=await(await fetch("/api/save",{method:"POST"})).json();lg(r.ok?"Сохранён #"+r.index:"Save error");if(r.ok){loadSaved();loadFlashInfo()}}
-async function requestInfo(){calibEditing=false;await fetch("/api/command",{method:"POST",body:"-inf"});lg("Info requested");setTimeout(update,500)}
-async function sendCmd(){var c=document.getElementById("cmd").value;if(!c)return;await fetch("/api/command",{method:"POST",body:c});lg("Sent: "+c);setTimeout(update,500)}
+async function delSaved(idx){if(!confirm("Удалить спектр #"+idx+"?"))return;await post("/api/saved/"+idx+"/delete");lg("Deleted #"+idx);if(overlayIdx===idx)clearOverlay();loadSaved();loadFlashInfo()}
+async function startAcq(){await post("/api/command",{body:"-sta"});lg("Start sent")}
+async function stopAcq(){await post("/api/command",{body:"-sto"});lg("Stop sent")}
+async function resetSpectrum(){clearCanvas();lastD=null;document.getElementById("big-time").textContent="00:00:00";document.getElementById("big-cps").textContent="0";document.getElementById("big-total").textContent="0";await post("/api/reset");lg("Reset sent")}
+async function saveSpectrum(){var r=await(await post("/api/save")).json();lg(r.ok?"Сохранён #"+r.index:"Save error");if(r.ok){loadSaved();loadFlashInfo()}}
+async function requestInfo(){calibEditing=false;await post("/api/command",{body:"-inf"});lg("Info requested");setTimeout(update,500)}
+async function sendCmd(){var c=document.getElementById("cmd").value;if(!c)return;await post("/api/command",{body:c});lg("Sent: "+c);setTimeout(update,500)}
 function toggleLogPanel(){logEl.style.display=logEl.style.display==="none"?"block":"none"}
-async function rebootDevice(){if(!confirm("Перезагрузить спектрометр?"))return;await fetch("/api/reboot-device",{method:"POST"});lg("Reboot device sent")}
-async function rebootEsp(){if(!confirm("Перезагрузить ESP32?"))return;await fetch("/api/reboot-esp",{method:"POST"});document.getElementById("status").textContent="Перезагрузка..."}
-async function resetWifi(){if(!confirm("Сбросить WiFi?"))return;await fetch("/api/wifi/reset",{method:"POST"});document.getElementById("status").textContent="Настройка WiFi..."}
+async function rebootDevice(){if(!confirm("Перезагрузить спектрометр?"))return;await post("/api/reboot-device");lg("Reboot device sent")}
+async function rebootEsp(){if(!confirm("Перезагрузить ESP32?"))return;await post("/api/reboot-esp");document.getElementById("status").textContent="Перезагрузка..."}
+async function resetWifi(){if(!confirm("Сбросить WiFi?"))return;await post("/api/wifi/reset");document.getElementById("status").textContent="Настройка WiFi..."}
 document.getElementById("cmd").addEventListener("keydown",function(e){if(e.key==="Enter")sendCmd()});
 ["cal-a","cal-b","cal-c","cal-d","cal-e"].forEach(function(id){document.getElementById(id).addEventListener("focus",function(){calibEditing=true})});
 async function initCalib(){
@@ -288,12 +292,13 @@ async function initCalib(){
  if(r.calibration){calib=r.calibration;if(!calibEditing)fillCalibFields(r.calibration)}
  if(r.serial){document.getElementById("device-name").textContent=r.serial}}catch(e){}
 }
+(async function(){await loadCsrf();
 setInterval(update,1000);
 setInterval(loadFlashInfo,10000);
 clearCanvas();
 initCalib();
 update();
 loadSaved();
-loadFlashInfo();
+loadFlashInfo();})();
 </script>
 </body></html>

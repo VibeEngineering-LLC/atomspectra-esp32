@@ -14,7 +14,6 @@
 
 #define WIFI_SSID_MAX         32
 #define WIFI_PASS_MAX         64
-#define WEB_AUTH_USER         "admin"
 
 #define TCP_BRIDGE_PORT       8234
 
@@ -84,6 +83,7 @@ void spectrum_process_stat_packet(const uint8_t *data, size_t len);
 void spectrum_process_info_response(const char *text);
 void spectrum_reset(void);
 const spectrum_data_t *spectrum_get_current(void);
+bool spectrum_get_snapshot(spectrum_data_t *out);
 const device_info_t   *spectrum_get_device_info(void);
 int  spectrum_save_to_flash(void);
 int  spectrum_list_saved(char *buf, size_t buf_size);

@@ -6,7 +6,7 @@ WiFi-шлюз для гамма-спектрометра **KB Radar «Atom Spect
 в реальном времени и показывает его в браузере — с осями, логарифмической шкалой,
 энергетической калибровкой в keV и экспортом в форматы **BecqMoni** и **InterSpec**.
 
-![ESP32-S3](https://img.shields.io/badge/ESP32--S3-N16R8-blue) ![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5.1+-green) ![USB](https://img.shields.io/badge/USB-OTG%20Host-orange) ![Channels](https://img.shields.io/badge/Spectrum-8192%20ch-purple)
+![ESP32-S3](https://img.shields.io/badge/ESP32--S3-N16R8-blue) ![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5.4-green) ![USB](https://img.shields.io/badge/USB-OTG%20Host-orange) ![Channels](https://img.shields.io/badge/Spectrum-8192%20ch-purple)
 
 ## Что это решает
 
@@ -100,7 +100,7 @@ Web UI открывается в браузере по адресу `http://<IP-
 - USB-кабель для прошивки ESP (через UART-порт, не OTG)
 
 **Софт:**
-- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) v5.1+ **или** Docker (`espressif/idf:v5.4`)
+- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) **v5.4** (протестированная версия; собирается в CI) **или** Docker (`espressif/idf:v5.4`)
 - Драйвер CH343 (если на плате CH343 USB-UART: [WCH driver](https://www.wch-ic.com/downloads/CH343SER_ZIP.html))
 
 > Подробная установка с нуля — в [`INSTALL.md`](INSTALL.md).
@@ -139,6 +139,7 @@ idf.py -p COM14 flash
 | Эндпоинт | Метод | Что делает |
 |---|---|---|
 | `/` | GET | Web UI |
+| `/api/csrf-token` | GET | Выдать CSRF-токен (нужен в заголовке `X-CSRF-Token` на всех POST) |
 | `/api/status` | GET | Статус устройства (JSON) |
 | `/api/spectrum.json` | GET | Живой спектр + статистика + калибровка |
 | `/api/spectrum` | GET | Сырой бинарный спектр (32768 байт) |
@@ -154,9 +155,32 @@ idf.py -p COM14 flash
 | `/api/saved/<N>/delete` | POST | Удалить сохранённый спектр |
 | `/api/device` | GET | Информация о приборе (настройки, калибровка, серийник) |
 | `/api/system` | GET | Здоровье ESP32 (heap, uptime, RSSI, flash) |
+| `/api/calibration` | POST | Задать калибровочные коэффициенты вручную |
 | `/api/reboot-device` | POST | Перезагрузить спектрометр (CMD 0xF3) |
-| `/api/reboot` | POST | Перезагрузить ESP32 |
+| `/api/reboot-esp` | POST | Перезагрузить ESP32 |
 | `/api/wifi/reset` | POST | Сбросить WiFi, перезагрузиться в режим настройки |
+
+> **Все POST-эндпоинты требуют заголовок `X-CSRF-Token`** со значением, полученным
+> из `GET /api/csrf-token`. Web UI делает это автоматически. CSRF-токен генерируется
+> при старте платы и защищает от подделки запросов сторонней страницей в браузере.
+
+## Безопасность и модель доверия
+
+Шлюз рассчитан на **доверенную локальную сеть** (домашний Wi-Fi) и **не имеет
+аутентификации пользователя** — кто угодно в той же сети может открыть Web UI,
+читать спектр и управлять прибором. Это осознанный выбор для домашнего прибора
+без облака и аккаунтов; не выставляйте плату напрямую в интернет.
+
+Что всё-таки защищено:
+- **CSRF-токен** на всех мутирующих POST (`/api/command`, `/api/reset`, `/api/save`,
+  `/api/reboot-*`, `/api/wifi/reset`, `/api/calibration`, удаление спектров). Сторонняя
+  вкладка в браузере оператора не может прочитать токен (same-origin policy), поэтому
+  не может «вслепую» отправить, например, сброс Wi-Fi или перезагрузку.
+- **TCP-мост** (порт 8234) — один клиент одновременно.
+
+Чего нет (by design): TLS, логин/пароль, разграничение прав. Если нужен внешний
+доступ — заводите его через доверенный канал (VPN/реверс-прокси с авторизацией),
+а не пробросом порта.
 
 ## TCP-мост (порт 8234)
 

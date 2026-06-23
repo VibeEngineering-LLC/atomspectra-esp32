@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "spectrum";
 #define STORAGE_PATH "/sto" "rage"
@@ -23,8 +25,14 @@ typedef struct {
 static spectrum_data_t s_spectrum;
 static device_info_t   s_device_info;
 
+// Защищает s_spectrum от гонки между CDC-таском (писатель) и httpd-таском (читатель).
+static SemaphoreHandle_t s_spec_lock;
+#define SPEC_LOCK()   do { if (s_spec_lock) xSemaphoreTake(s_spec_lock, portMAX_DELAY); } while (0)
+#define SPEC_UNLOCK() do { if (s_spec_lock) xSemaphoreGive(s_spec_lock); } while (0)
+
 void spectrum_init(void)
 {
+    s_spec_lock = xSemaphoreCreateMutex();
     memset(&s_spectrum, 0, sizeof(s_spectrum));
     memset(&s_device_info, 0, sizeof(s_device_info));
     esp_vfs_littlefs_conf_t conf = {
@@ -45,6 +53,7 @@ void spectrum_init(void)
 void spectrum_process_histogram_chunk(const uint8_t *data, size_t len)
 {
     if (len < 6) return;
+    SPEC_LOCK();
     uint16_t offset = data[0] | (data[1] << 8);
     size_t bin_bytes = len - 2;
     size_t bin_count = bin_bytes / 4;
@@ -57,19 +66,23 @@ void spectrum_process_histogram_chunk(const uint8_t *data, size_t len)
     for (int i = 0; i < SPECTRUM_CHANNELS; i++) total += s_spectrum.bins[i];
     s_spectrum.total_counts = total;
     s_spectrum.valid = true;
+    SPEC_UNLOCK();
 }
 
 void spectrum_process_stat_packet(const uint8_t *data, size_t len)
 {
     if (len < 10) return;
+    SPEC_LOCK();
     s_spectrum.total_time_sec = data[0] | (data[1]<<8) | (data[2]<<16) | (data[3]<<24);
     s_spectrum.cpu_load = data[4] | (data[5] << 8);
     s_spectrum.cps = data[6] | (data[7]<<8) | (data[8]<<16) | (data[9]<<24);
     if (len >= 14)
         s_spectrum.lost_impulses = data[10] | (data[11]<<8) | (data[12]<<16) | (data[13]<<24);
+    SPEC_UNLOCK();
 }
 void spectrum_process_info_response(const char *text)
 {
+    SPEC_LOCK();
     device_info_t *d = &s_device_info;
     memset(d, 0, sizeof(*d));
     char lbuf[48][64];
@@ -154,27 +167,48 @@ void spectrum_process_info_response(const char *text)
     s_spectrum.temperature[0] = d->t1;
     s_spectrum.temperature[1] = d->t2;
     s_spectrum.temperature[2] = d->t3;
+    SPEC_UNLOCK();
 }
 void spectrum_reset(void)
 {
+    SPEC_LOCK();
     memset(s_spectrum.bins, 0, sizeof(s_spectrum.bins));
     s_spectrum.total_counts = 0;
     s_spectrum.total_time_sec = 0;
     s_spectrum.cps = 0;
     s_spectrum.lost_impulses = 0;
     s_spectrum.valid = false;
+    SPEC_UNLOCK();
 }
 
 const spectrum_data_t *spectrum_get_current(void) { return &s_spectrum; }
 const device_info_t   *spectrum_get_device_info(void) { return &s_device_info; }
 
+// Атомарный снимок спектра под локом — для сетевых читателей (export/spectrum).
+// Лок держится только на время memcpy; httpd_resp_send идёт уже по копии.
+bool spectrum_get_snapshot(spectrum_data_t *out)
+{
+    SPEC_LOCK();
+    memcpy(out, &s_spectrum, sizeof(*out));
+    SPEC_UNLOCK();
+    return out->valid;
+}
+
 int spectrum_save_to_flash(void)
 {
-    if (!s_spectrum.valid) return -1;
+    spectrum_data_t *snap = malloc(sizeof(*snap));
+    if (!snap) return -1;
+    SPEC_LOCK();
+    if (!s_spectrum.valid) { SPEC_UNLOCK(); free(snap); return -1; }
+    s_spectrum.saved_at = time(NULL);
+    memcpy(snap, &s_spectrum, sizeof(*snap));
+    SPEC_UNLOCK();
+
     size_t total = 0, used = 0;
     esp_littlefs_info("storage", &total, &used);
     if (total - used < AUTOSAVE_RESERVE + sizeof(spectrum_data_t)) {
         ESP_LOGW(TAG, "Save rejected: free=%zu < reserve=%d", total - used, AUTOSAVE_RESERVE);
+        free(snap);
         return -2;
     }
     char path[64];
@@ -187,12 +221,12 @@ int spectrum_save_to_flash(void)
         fclose(f);
         idx++;
     }
-    s_spectrum.saved_at = time(NULL);
     f = fopen(path, "wb");
-    if (!f) { ESP_LOGE(TAG, "Cannot create %s", path); return -1; }
-    fwrite(&s_spectrum, sizeof(s_spectrum), 1, f);
+    if (!f) { ESP_LOGE(TAG, "Cannot create %s", path); free(snap); return -1; }
+    fwrite(snap, sizeof(*snap), 1, f);
     fclose(f);
-    ESP_LOGI(TAG, "Saved spectrum to %s (%" PRIu32 " counts)", path, s_spectrum.total_counts);
+    ESP_LOGI(TAG, "Saved spectrum to %s (%" PRIu32 " counts)", path, snap->total_counts);
+    free(snap);
     return idx;
 }
 
@@ -223,6 +257,8 @@ int spectrum_load_from_flash(int index, spectrum_data_t *out)
     return (rd == sizeof(*out)) ? 0 : -1;
 }
 
+// ВНИМАНИЕ: вызывается из info_response/set_calibration, которые уже держат SPEC_LOCK.
+// Сам лок НЕ берёт (иначе deadlock на нерекурсивном мьютексе).
 void spectrum_save_calibration(void)
 {
     if (!s_spectrum.calib_valid) return;
@@ -240,6 +276,7 @@ void spectrum_save_calibration(void)
 
 void spectrum_set_calibration(const double *coeffs, int order)
 {
+    SPEC_LOCK();
     for (int i = 0; i <= order && i < CALIB_COEFFS; i++)
         s_spectrum.calibration[i] = coeffs[i];
     for (int i = order + 1; i < CALIB_COEFFS; i++)
@@ -249,6 +286,7 @@ void spectrum_set_calibration(const double *coeffs, int order)
     ESP_LOGI(TAG, "Manual calibration set: order=%d c0=%.6g c1=%.6g", order,
              s_spectrum.calibration[0], s_spectrum.calibration[1]);
     spectrum_save_calibration();
+    SPEC_UNLOCK();
 }
 
 void spectrum_load_calibration(void)
@@ -259,33 +297,43 @@ void spectrum_load_calibration(void)
     size_t rd = fread(&st, 1, sizeof(st), f);
     fclose(f);
     if (rd != sizeof(st) || !st.valid) return;
+    SPEC_LOCK();
     memcpy(s_spectrum.calibration, st.calibration, sizeof(st.calibration));
     s_spectrum.calib_order = st.calib_order;
     s_spectrum.calib_valid = true;
     if (st.serial[0] && !s_spectrum.serial_number[0])
         strncpy(s_spectrum.serial_number, st.serial, sizeof(s_spectrum.serial_number) - 1);
+    SPEC_UNLOCK();
     ESP_LOGI(TAG, "Calibration loaded: order=%d serial='%s'", st.calib_order, st.serial);
 }
 
 void spectrum_autosave(void)
 {
-    if (!s_spectrum.valid) return;
+    spectrum_data_t *snap = malloc(sizeof(*snap));
+    if (!snap) return;
+    SPEC_LOCK();
+    if (!s_spectrum.valid) { SPEC_UNLOCK(); free(snap); return; }
+    memcpy(snap, &s_spectrum, sizeof(*snap));
+    SPEC_UNLOCK();
     FILE *f = fopen(AUTOSAVE_FILE, "wb");
-    if (!f) { ESP_LOGE(TAG, "Autosave open failed"); return; }
-    fwrite(&s_spectrum, sizeof(s_spectrum), 1, f);
+    if (!f) { ESP_LOGE(TAG, "Autosave open failed"); free(snap); return; }
+    fwrite(snap, sizeof(*snap), 1, f);
     fclose(f);
+    free(snap);
 }
 
 void spectrum_restore_autosave(void)
 {
     FILE *f = fopen(AUTOSAVE_FILE, "rb");
     if (!f) return;
+    SPEC_LOCK();
     size_t rd = fread(&s_spectrum, 1, sizeof(s_spectrum), f);
     fclose(f);
     if (rd == sizeof(s_spectrum) && s_spectrum.valid)
         ESP_LOGI(TAG, "Restored autosave: %" PRIu32 " counts, %" PRIu32 "s", s_spectrum.total_counts, s_spectrum.total_time_sec);
     else
         memset(&s_spectrum, 0, sizeof(s_spectrum));
+    SPEC_UNLOCK();
 }
 
 int spectrum_delete_from_flash(int index)

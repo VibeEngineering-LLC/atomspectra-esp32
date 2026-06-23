@@ -16,10 +16,46 @@
 #include "esp_wifi.h"
 #include "esp_timer.h"
 #include "esp_littlefs.h"
+#include "esp_random.h"
+#include <dirent.h>
 
 static const char *TAG = "web";
 
 #define STORAGE_PATH "/sto" "rage"
+
+// CSRF-токен: генерируется при старте, выдаётся по GET /api/csrf-token,
+// требуется в заголовке X-CSRF-Token на всех мутирующих POST. Защищает
+// открытый-в-LAN Web UI от drive-by cross-origin POST: сторонняя страница
+// не может прочитать токен (same-origin policy) → не может подделать запрос.
+static char s_csrf[33];
+
+static void csrf_generate(void)
+{
+    static const char hx[] = "0123456789abcdef";
+    for (int i = 0; i < 32; i++)
+        s_csrf[i] = hx[esp_random() & 0x0F];
+    s_csrf[32] = '\0';
+}
+
+// Проверяет X-CSRF-Token. При несовпадении сам шлёт 403 и возвращает false.
+static bool csrf_check(httpd_req_t *req)
+{
+    char hdr[40] = {0};
+    if (httpd_req_get_hdr_value_str(req, "X-CSRF-Token", hdr, sizeof(hdr)) == ESP_OK
+        && s_csrf[0] && strcmp(hdr, s_csrf) == 0)
+        return true;
+    httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Bad or missing CSRF token");
+    return false;
+}
+
+static esp_err_t handle_csrf_token(httpd_req_t *req)
+{
+    char buf[48];
+    int n = snprintf(buf, sizeof(buf), "{\"token\":\"%s\"}", s_csrf);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, n);
+    return ESP_OK;
+}
 
 static int parse_saved_index(const char *uri)
 {
@@ -63,20 +99,30 @@ static esp_err_t handle_status(httpd_req_t *req)
 
 static esp_err_t handle_spectrum(httpd_req_t *req)
 {
-    const spectrum_data_t *sp = spectrum_get_current();
-    if (!sp->valid) {
+    spectrum_data_t *sp = malloc(sizeof(*sp));
+    if (!sp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (!spectrum_get_snapshot(sp)) {
+        free(sp);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data yet");
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "application/octet-stream");
     httpd_resp_set_hdr(req, "Content-Disposition", "inline");
     httpd_resp_send(req, (const char *)sp->bins, SPECTRUM_CHANNELS * sizeof(uint32_t));
+    free(sp);
     return ESP_OK;
 }
 
 static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *sp)
 {
-    static char buf[4096];
+    char *buf = malloc(4096);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"bins\":[");
     int pos = 0;
@@ -105,21 +151,30 @@ static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *s
     }
     httpd_resp_sendstr_chunk(req, "}");
     httpd_resp_send_chunk(req, NULL, 0);
+    free(buf);
     return ESP_OK;
 }
 
 static esp_err_t handle_spectrum_json(httpd_req_t *req)
 {
-    const spectrum_data_t *sp = spectrum_get_current();
-    if (!sp->valid) {
+    spectrum_data_t *sp = malloc(sizeof(*sp));
+    if (!sp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (!spectrum_get_snapshot(sp)) {
+        free(sp);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data yet");
         return ESP_FAIL;
     }
-    return render_spectrum_json(req, sp);
+    esp_err_t ret = render_spectrum_json(req, sp);
+    free(sp);
+    return ret;
 }
 
 static esp_err_t handle_command(httpd_req_t *req)
 {
+    if (!csrf_check(req)) return ESP_FAIL;
     char body[256] = {0};
     int recv_len = httpd_req_recv(req, body, sizeof(body) - 1);
     if (recv_len <= 0) {
@@ -141,6 +196,7 @@ static esp_err_t handle_command(httpd_req_t *req)
 
 static esp_err_t handle_reset(httpd_req_t *req)
 {
+    if (!csrf_check(req)) return ESP_FAIL;
     uint8_t pkt_buf[64];
     shproto_struct pkt;
     shproto_init(&pkt, pkt_buf, sizeof(pkt_buf));
@@ -157,6 +213,7 @@ static esp_err_t handle_reset(httpd_req_t *req)
 
 static esp_err_t handle_save(httpd_req_t *req)
 {
+    if (!csrf_check(req)) return ESP_FAIL;
     int idx = spectrum_save_to_flash();
     char resp[64];
     if (idx >= 0)
@@ -172,13 +229,22 @@ static esp_err_t handle_list(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"spectra\":[");
-    char path[64], item[160];
-    int count = 0, misses = 0;
-    for (int i = 0; i < 9999 && misses < 20; i++) {
-        snprintf(path, sizeof(path), "%s/spec_%04d.bin", STORAGE_PATH, i);
+    char path[80], item[160];
+    int count = 0;
+    // Перечисляем реальные файлы каталога, а не пробуем индексы подряд:
+    // save() занимает первую дырку, поэтому после удалений индексы не
+    // обязательно идут без разрывов — старый "стоп после 20 пропусков" терял
+    // спектры с большими индексами. readdir видит все файлы.
+    DIR *dir = opendir(STORAGE_PATH);
+    struct dirent *de;
+    while (dir && (de = readdir(dir)) != NULL) {
+        int i = -1;
+        if (sscanf(de->d_name, "spec_%d.bin", &i) != 1 || i < 0) continue;
+        // Путь восстанавливаем из разобранного индекса (%d ограничен), а не из
+        // d_name (%s до 255 байт) — иначе -Werror=format-truncation.
+        snprintf(path, sizeof(path), "%s/spec_%d.bin", STORAGE_PATH, i);
         FILE *f = fopen(path, "rb");
-        if (!f) { misses++; continue; }
-        misses = 0;
+        if (!f) continue;
         uint32_t counts = 0, time_sec = 0;
         time_t saved_at = 0;
         fseek(f, offsetof(spectrum_data_t, total_counts), SEEK_SET);
@@ -192,6 +258,7 @@ static esp_err_t handle_list(httpd_req_t *req)
         httpd_resp_send_chunk(req, item, n);
         count++;
     }
+    if (dir) closedir(dir);
     char tail[32];
     int n = snprintf(tail, sizeof(tail), "],\"count\":%d}", count);
     httpd_resp_send_chunk(req, tail, n);
@@ -382,22 +449,36 @@ static esp_err_t render_spectrum_csv(httpd_req_t *req, const spectrum_data_t *sp
 
 static esp_err_t handle_export_xml(httpd_req_t *req)
 {
-    const spectrum_data_t *sp = spectrum_get_current();
-    if (!sp->valid) {
+    spectrum_data_t *sp = malloc(sizeof(*sp));
+    if (!sp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (!spectrum_get_snapshot(sp)) {
+        free(sp);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data");
         return ESP_FAIL;
     }
-    return render_spectrum_xml(req, sp, "spectrum.xml");
+    esp_err_t ret = render_spectrum_xml(req, sp, "spectrum.xml");
+    free(sp);
+    return ret;
 }
 
 static esp_err_t handle_export_csv(httpd_req_t *req)
 {
-    const spectrum_data_t *sp = spectrum_get_current();
-    if (!sp->valid) {
+    spectrum_data_t *sp = malloc(sizeof(*sp));
+    if (!sp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (!spectrum_get_snapshot(sp)) {
+        free(sp);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No spectrum data");
         return ESP_FAIL;
     }
-    return render_spectrum_csv(req, sp, "spectrum.csv");
+    esp_err_t ret = render_spectrum_csv(req, sp, "spectrum.csv");
+    free(sp);
+    return ret;
 }
 
 static esp_err_t handle_saved_export_xml(httpd_req_t *req);
@@ -487,6 +568,7 @@ static esp_err_t handle_saved_json(httpd_req_t *req)
 
 static esp_err_t handle_saved_delete(httpd_req_t *req)
 {
+    if (!csrf_check(req)) return ESP_FAIL;
     int idx = parse_saved_index(req->uri);
     if (idx < 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad index");
@@ -503,7 +585,9 @@ static esp_err_t handle_saved_delete(httpd_req_t *req)
 static esp_err_t handle_device(httpd_req_t *req)
 {
     const device_info_t *di = spectrum_get_device_info();
-    const spectrum_data_t *sp = spectrum_get_current();
+    // Снимок под локом: serial/calibration пишутся CDC-задачей конкурентно.
+    spectrum_data_t *sp = malloc(sizeof(*sp));
+    bool have_sp = sp && spectrum_get_snapshot(sp);
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "valid", di->valid);
     if (di->valid) {
@@ -525,9 +609,9 @@ static esp_err_t handle_device(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "tc_on", di->tc_on);
         cJSON_AddNumberToObject(root, "tp", di->tp);
     }
-    if (sp->serial_number[0])
+    if (have_sp && sp->serial_number[0])
         cJSON_AddStringToObject(root, "serial", sp->serial_number);
-    if (sp->calib_valid) {
+    if (have_sp && sp->calib_valid) {
         cJSON *cal = cJSON_CreateArray();
         for (int i = 0; i <= sp->calib_order; i++)
             cJSON_AddItemToArray(cal, cJSON_CreateNumber(sp->calibration[i]));
@@ -539,11 +623,13 @@ static esp_err_t handle_device(httpd_req_t *req)
     httpd_resp_sendstr(req, json);
     free(json);
     cJSON_Delete(root);
+    free(sp);
     return ESP_OK;
 }
 
 static esp_err_t handle_reboot_device(httpd_req_t *req)
 {
+    if (!csrf_check(req)) return ESP_FAIL;
     uint8_t pkt_buf[64];
     shproto_struct pkt;
     shproto_init(&pkt, pkt_buf, sizeof(pkt_buf));
@@ -583,6 +669,7 @@ static esp_err_t handle_system(httpd_req_t *req)
 
 static esp_err_t handle_set_calibration(httpd_req_t *req)
 {
+    if (!csrf_check(req)) return ESP_FAIL;
     char body[512] = {0};
     int recv_len = httpd_req_recv(req, body, sizeof(body) - 1);
     if (recv_len <= 0) {
@@ -602,6 +689,11 @@ static esp_err_t handle_set_calibration(httpd_req_t *req)
         return ESP_FAIL;
     }
     int n = cJSON_GetArraySize(arr);
+    if (n < 1) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty coeffs");
+        return ESP_FAIL;
+    }
     if (n > CALIB_COEFFS) n = CALIB_COEFFS;
     double coeffs[CALIB_COEFFS] = {0};
     for (int i = 0; i < n; i++) {
@@ -617,6 +709,7 @@ static esp_err_t handle_set_calibration(httpd_req_t *req)
 
 static esp_err_t handle_reboot_esp(httpd_req_t *req)
 {
+    if (!csrf_check(req)) return ESP_FAIL;
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -653,6 +746,7 @@ static esp_err_t handle_healthcheck(httpd_req_t *req)
 
 static esp_err_t handle_wifi_reset(httpd_req_t *req)
 {
+    if (!csrf_check(req)) return ESP_FAIL;
     nvs_handle_t nvs;
     if (nvs_open("wifi", NVS_READWRITE, &nvs) == ESP_OK) {
         nvs_erase_all(nvs);
@@ -667,6 +761,8 @@ static esp_err_t handle_wifi_reset(httpd_req_t *req)
 
 void web_server_init(void)
 {
+    csrf_generate();
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 24;
     config.stack_size = 8192;
@@ -681,6 +777,7 @@ void web_server_init(void)
     }
 
     const httpd_uri_t uris[] = {
+        {"/api/csrf-token",              HTTP_GET,  handle_csrf_token,       NULL},
         {"/api/status",                  HTTP_GET,  handle_status,           NULL},
         {"/api/spectrum",                HTTP_GET,  handle_spectrum,         NULL},
         {"/api/spectrum.json",           HTTP_GET,  handle_spectrum_json,    NULL},

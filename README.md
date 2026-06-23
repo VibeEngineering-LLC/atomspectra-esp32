@@ -44,6 +44,8 @@ WiFi-шлюз для гамма-спектрометра **KB Radar «Atom Spect
 
 ![Web UI — спектр в реальном времени](images/web-ui.png)
 
+![Web UI — калибровка энергии и шкала keV](images/web-ui-calibration.png)
+
 Web UI открывается в браузере по адресу `http://<IP-платы>/`:
 
 **Спектр (canvas 1200×400)**

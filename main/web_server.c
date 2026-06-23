@@ -670,6 +670,8 @@ void web_server_init(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 24;
     config.stack_size = 8192;
+    config.max_open_sockets = 11;        // из 16 LWIP-сокетов; запас для tcp_bridge + sntp
+    config.lru_purge_enable = true;      // при исчерпании пула закрыть LRU-соединение, не отказывать (errno 23)
     config.uri_match_fn = httpd_uri_match_wildcard;
 
     httpd_handle_t server = NULL;

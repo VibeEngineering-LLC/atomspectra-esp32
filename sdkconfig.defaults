@@ -18,6 +18,9 @@ CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK=y
 # WiFi
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
 
+# Network — больше сокетов для частого polling Web UI (иначе httpd accept errno 23)
+CONFIG_LWIP_MAX_SOCKETS=16
+
 # LittleFS for spectrum storage
 CONFIG_LITTLEFS_MAX_PARTITIONS=3
 

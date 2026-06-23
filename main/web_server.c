@@ -76,11 +76,7 @@ static esp_err_t handle_spectrum(httpd_req_t *req)
 
 static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *sp)
 {
-    char *buf = malloc(4096);
-    if (!buf) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
-        return ESP_FAIL;
-    }
+    static char buf[4096];
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"bins\":[");
     int pos = 0;
@@ -109,7 +105,6 @@ static esp_err_t render_spectrum_json(httpd_req_t *req, const spectrum_data_t *s
     }
     httpd_resp_sendstr_chunk(req, "}");
     httpd_resp_send_chunk(req, NULL, 0);
-    free(buf);
     return ESP_OK;
 }
 
@@ -674,7 +669,7 @@ void web_server_init(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 24;
-    config.stack_size = 12288;
+    config.stack_size = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
     httpd_handle_t server = NULL;

@@ -267,7 +267,7 @@ static esp_err_t render_spectrum_xml(httpd_req_t *req, const spectrum_data_t *sp
         httpd_resp_send_chunk(req, buf, n);
         for (int i = 0; i <= sp->calib_order; i++) {
             n = snprintf(buf, 4096,
-                "            <Coefficient>%.15g</Coefficient>\r\n",
+                "            <Coefficient>%.15G</Coefficient>\r\n",
                 sp->calibration[i]);
             httpd_resp_send_chunk(req, buf, n);
         }
@@ -626,6 +626,33 @@ static esp_err_t handle_reboot_esp(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handle_healthcheck(httpd_req_t *req)
+{
+    bool usb = usb_host_cdc_is_connected();
+    bool wifi = wifi_is_connected();
+    int64_t uptime_us = esp_timer_get_time();
+    const spectrum_data_t *sp = spectrum_get_current();
+
+    httpd_resp_set_type(req, "application/json");
+    if (usb && wifi) {
+        httpd_resp_set_status(req, "200 OK");
+    } else {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+    }
+
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "{\"status\":\"%s\",\"analyzer_connected\":%s,\"wifi_connected\":%s,"
+        "\"uptime_sec\":%.1f,\"spectrum_valid\":%s}",
+        (usb && wifi) ? "ok" : "degraded",
+        usb ? "true" : "false",
+        wifi ? "true" : "false",
+        (double)uptime_us / 1000000.0,
+        sp->valid ? "true" : "false");
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+}
+
 static esp_err_t handle_wifi_reset(httpd_req_t *req)
 {
     nvs_handle_t nvs;
@@ -671,6 +698,7 @@ void web_server_init(void)
         {"/api/wifi/reset",              HTTP_POST, handle_wifi_reset,       NULL},
         {"/api/reboot-esp",              HTTP_POST, handle_reboot_esp,       NULL},
         {"/api/calibration",             HTTP_POST, handle_set_calibration,  NULL},
+        {"/healthcheck",                 HTTP_GET,  handle_healthcheck,      NULL},
         {"/",                            HTTP_GET,  handle_index,            NULL},
     };
 

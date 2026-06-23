@@ -1,0 +1,775 @@
+openapi: "3.0.3"
+info:
+  title: AtomSpectra ESP32 Gateway API
+  description: |
+    WiFi-шлюз для гамма-спектрометра KB Radar «Atom Spectra» на ESP32-S3.
+    Подключается к спектрометру по USB (FTDI FT232R, 600000 бод, протокол shproto),
+    раздаёт 8192-канальный спектр по HTTP и TCP-мосту (порт 8234).
+
+    **Интеграция с BecqMoni:**
+    - XML-экспорт (`/api/export.xml`) — формат `ResultDataFile` (FormatVersion 120920)
+    - TCP-мост (порт 8234) — прозрачный serial-over-WiFi, BecqMoni подключается вместо COM-порта
+    - JSON API — программный доступ к спектру, калибровке, управлению
+
+    **Типичные сценарии:**
+    1. **Мониторинг** — `GET /healthcheck` → `GET /api/spectrum.json` (polling 1/с)
+    2. **Экспорт для анализа** — `GET /api/export.xml` (BecqMoni) или `/api/export.csv` (InterSpec)
+    3. **Управление набором** — `POST /api/command` с телом `-sta` / `-sto` / `-rst`
+    4. **Архив спектров** — `POST /api/save` → `GET /api/list` → `GET /api/saved/{index}/export.xml`
+    5. **Калибровка** — `GET /api/device` (прочитать) → `POST /api/calibration` (задать вручную)
+    6. **Диагностика** — `GET /api/system` (heap, RSSI, flash) + `GET /api/status` (USB, TCP)
+  version: "1.0.0"
+  contact:
+    name: VibeEngineering LLC
+    url: https://github.com/VibeEngineering-LLC/atomspectra-esp32
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://{host}
+    description: ESP32-S3 в локальной сети
+    variables:
+      host:
+        default: "192.168.1.100"
+        description: IP-адрес или mDNS-имя платы
+
+tags:
+  - name: health
+    description: Проверка жизнеспособности шлюза
+  - name: spectrum
+    description: Живой спектр — бинарный, JSON, XML, CSV
+  - name: control
+    description: Управление прибором (старт/стоп/сброс/команды)
+  - name: storage
+    description: Сохранение и загрузка спектров с flash
+  - name: device
+    description: Информация о приборе, калибровка
+  - name: system
+    description: Состояние ESP32, WiFi, перезагрузка
+
+paths:
+  /healthcheck:
+    get:
+      tags: [health]
+      summary: Проверка здоровья шлюза
+      description: |
+        Возвращает 200 если шлюз работает и прибор подключён.
+        503 если прибор не подключён по USB или нет WiFi.
+        Предназначен для мониторинга (Prometheus, Uptime Kuma, BecqMoni auto-discovery).
+      operationId: healthcheck
+      responses:
+        "200":
+          description: Шлюз и прибор в норме
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: "ok"
+                analyzer_connected: true
+                wifi_connected: true
+                uptime_sec: 3600
+        "503":
+          description: Прибор не подключён или WiFi нет
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: "degraded"
+                analyzer_connected: false
+                wifi_connected: true
+                uptime_sec: 120
+
+  /api/status:
+    get:
+      tags: [device]
+      summary: Краткий статус устройства
+      description: |
+        Подключение USB-анализатора, WiFi, TCP-клиент, счётчики.
+        Если прибор отвечал на `-inf`, включает параметры настройки
+        (dev, version, mode, freq, температуры, noise, max).
+      operationId: getStatus
+      responses:
+        "200":
+          description: JSON со статусом
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /api/spectrum:
+    get:
+      tags: [spectrum]
+      summary: Сырой бинарный спектр
+      description: |
+        8192 каналов × 4 байта (uint32 LE) = 32768 байт.
+        Для программной обработки без парсинга JSON/XML.
+      operationId: getSpectrumBinary
+      responses:
+        "200":
+          description: Бинарные данные спектра
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+                description: "8192 × uint32 LE = 32768 bytes"
+        "404":
+          description: Спектр ещё не получен (прибор только подключился)
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/spectrum.json:
+    get:
+      tags: [spectrum]
+      summary: Живой спектр в JSON
+      description: |
+        Полный 8192-канальный спектр с метаданными: счётчики, время,
+        температуры, серийник, калибровка (если есть).
+        Основной эндпоинт для Web UI (polling 1 раз/сек).
+      operationId: getSpectrumJson
+      responses:
+        "200":
+          description: JSON спектра
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpectrumJson"
+        "404":
+          description: Спектр ещё не получен
+
+  /api/export.xml:
+    get:
+      tags: [spectrum]
+      summary: Экспорт живого спектра в BecqMoni XML
+      description: |
+        Формат `ResultDataFile` (FormatVersion 120920).
+        Включает `EnergyCalibration` (если калибровка получена от прибора),
+        `ValidPulseCount`, `TotalPulseCount`, `MeasurementTime`, `LiveTime`,
+        8192 `<DataPoint>`.
+
+        Совместим с BecqMoni: File → Open → выбрать скачанный `.xml`.
+
+        **Коэффициенты калибровки** в восходящем порядке:
+        `c₀` (offset), `c₁` (ch¹), `c₂` (ch²), `c₃` (ch³), `c₄` (ch⁴).
+        Полином: `E(ch) = c₀ + c₁·ch + c₂·ch² + c₃·ch³ + c₄·ch⁴`.
+      operationId: exportXml
+      responses:
+        "200":
+          description: BecqMoni-совместимый XML
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="spectrum.xml"'
+          content:
+            application/xml:
+              schema:
+                type: string
+                description: ResultDataFile XML
+        "404":
+          description: Спектр ещё не получен
+
+  /api/export.csv:
+    get:
+      tags: [spectrum]
+      summary: Экспорт живого спектра в InterSpec CSV
+      description: |
+        Заголовки: `calibcoeff`, `remark`, `livetime`, `realtime`,
+        `detectorname`, `SerialNumber`, `starttime`.
+        Затем 8192 строк `channel, count` (1-based).
+
+        Совместим с InterSpec: File → Open → выбрать `.csv`.
+      operationId: exportCsv
+      responses:
+        "200":
+          description: InterSpec-совместимый CSV
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="spectrum.csv"'
+          content:
+            text/csv:
+              schema:
+                type: string
+        "404":
+          description: Спектр ещё не получен
+
+  /api/command:
+    post:
+      tags: [control]
+      summary: Отправить текстовую команду прибору
+      description: |
+        Команда оборачивается в пакет shproto (CMD_TEXT = 0x03) и
+        отправляется по USB. Примеры команд:
+
+        | Команда | Действие |
+        |---------|----------|
+        | `-sta`  | Запуск набора спектра |
+        | `-sto`  | Остановка набора |
+        | `-rst`  | Сброс счётчиков |
+        | `-inf`  | Запросить информацию о приборе (калибровка, серийник) |
+        | `-nos N`| Установить порог шума (N = целое) |
+
+        Максимальная длина команды — 255 байт.
+      operationId: sendCommand
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+              maxLength: 255
+              example: "-sta"
+      responses:
+        "200":
+          description: Команда отправлена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          description: Пустое тело запроса
+
+  /api/reset:
+    post:
+      tags: [control]
+      summary: Сброс спектра (счётчики + прибор)
+      description: |
+        Отправляет команду `-rst` прибору И обнуляет локальные счётчики
+        на ESP32 (`spectrum_reset()`). Эквивалент кнопки ↻ в Web UI.
+      operationId: resetSpectrum
+      responses:
+        "200":
+          description: Спектр сброшен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/save:
+    post:
+      tags: [storage]
+      summary: Сохранить текущий спектр на flash
+      description: |
+        Записывает полную структуру `spectrum_data_t` (~33 КБ) в файл
+        `spec_NNNN.bin` на LittleFS. Индекс auto-increment.
+        Ёмкость ~400 спектров (при 12.9 МБ разделе).
+      operationId: saveSpectrum
+      responses:
+        "200":
+          description: Спектр сохранён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SaveResponse"
+
+  /api/list:
+    get:
+      tags: [storage]
+      summary: Список сохранённых спектров
+      description: |
+        Сканирует LittleFS, возвращает массив сохранённых спектров
+        с краткими метаданными (counts, time, saved_at).
+      operationId: listSaved
+      responses:
+        "200":
+          description: Массив сохранённых спектров
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResponse"
+
+  /api/saved/{index}/export.xml:
+    get:
+      tags: [storage]
+      summary: Экспорт сохранённого спектра в BecqMoni XML
+      operationId: getSavedXml
+      parameters:
+        - $ref: "#/components/parameters/SpectrumIndex"
+      responses:
+        "200":
+          description: BecqMoni XML сохранённого спектра
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="spectrum_0001.xml"'
+          content:
+            application/xml:
+              schema:
+                type: string
+        "400":
+          description: Неверный индекс
+        "404":
+          description: Спектр не найден
+
+  /api/saved/{index}/export.csv:
+    get:
+      tags: [storage]
+      summary: Экспорт сохранённого спектра в InterSpec CSV
+      operationId: getSavedCsv
+      parameters:
+        - $ref: "#/components/parameters/SpectrumIndex"
+      responses:
+        "200":
+          description: InterSpec CSV сохранённого спектра
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="spectrum_0001.csv"'
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          description: Неверный индекс
+        "404":
+          description: Спектр не найден
+
+  /api/saved/{index}/spectrum.json:
+    get:
+      tags: [storage]
+      summary: Сохранённый спектр в JSON
+      operationId: getSavedJson
+      parameters:
+        - $ref: "#/components/parameters/SpectrumIndex"
+      responses:
+        "200":
+          description: JSON сохранённого спектра
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpectrumJson"
+        "400":
+          description: Неверный индекс
+        "404":
+          description: Спектр не найден
+
+  /api/saved/{index}/delete:
+    post:
+      tags: [storage]
+      summary: Удалить сохранённый спектр
+      operationId: deleteSaved
+      parameters:
+        - $ref: "#/components/parameters/SpectrumIndex"
+      responses:
+        "200":
+          description: Результат удаления
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          description: Неверный индекс
+
+  /api/device:
+    get:
+      tags: [device]
+      summary: Информация о приборе и калибровка
+      description: |
+        Полные параметры настройки прибора (из ответа на `-inf`):
+        rise/fall/noise/freq/max_integral/hyst/mode/step/pot/tc_on/tp,
+        температуры (t1, t2, t3), серийный номер, калибровка.
+
+        **Калибровка** (`calibration` массив) — коэффициенты полинома
+        в восходящем порядке: `[c₀, c₁, c₂, c₃, c₄]`.
+        BecqMoni UI показывает их в обратном: `a=c₄, b=c₃, c=c₂, d=c₁, e=c₀`.
+      operationId: getDevice
+      responses:
+        "200":
+          description: Параметры прибора
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceResponse"
+
+  /api/calibration:
+    post:
+      tags: [device]
+      summary: Задать калибровку вручную
+      description: |
+        Устанавливает полиномиальные коэффициенты энергетической калибровки.
+        Коэффициенты сохраняются в `calib.bin` на flash и переживают ребут.
+
+        Порядок — восходящий: `coeffs[0]` = offset (c₀), `coeffs[1]` = ch¹ и т.д.
+        Максимум 5 коэффициентов (полином 4-го порядка).
+      operationId: setCalibration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CalibrationRequest"
+            example:
+              coeffs: [3.522, 0.3837, 2.675e-05, -6.49e-09, 5.675e-13]
+      responses:
+        "200":
+          description: Калибровка установлена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          description: Невалидный JSON или отсутствует поле coeffs
+
+  /api/system:
+    get:
+      tags: [system]
+      summary: Здоровье ESP32
+      description: |
+        Heap (свободная/минимальная), uptime, RSSI WiFi, SSID,
+        использование flash (LittleFS total/used), статусы подключений.
+      operationId: getSystem
+      responses:
+        "200":
+          description: Системная информация
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemResponse"
+
+  /api/reboot-device:
+    post:
+      tags: [control]
+      summary: Перезагрузить спектрометр
+      description: |
+        Отправляет пакет CMD_REBOOT (0xF3) прибору по USB.
+        Прибор перезагрузится, USB-соединение восстановится автоматически.
+      operationId: rebootDevice
+      responses:
+        "200":
+          description: Команда отправлена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/reboot-esp:
+    post:
+      tags: [system]
+      summary: Перезагрузить ESP32
+      description: |
+        Перезагружает сам шлюз (ESP32). Спектрометр продолжает работать.
+        Текущий спектр будет восстановлен из autosave (`current.bin`).
+        Калибровка будет восстановлена из `calib.bin`.
+
+        **Внимание:** HTTP-ответ `{"ok":true}` приходит до ребута (задержка 500 мс).
+        Шлюз будет недоступен ~5–10 секунд.
+      operationId: rebootEsp
+      responses:
+        "200":
+          description: Ребут инициирован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /api/wifi/reset:
+    post:
+      tags: [system]
+      summary: Сбросить WiFi и перезагрузиться
+      description: |
+        Стирает сохранённые SSID/пароль из NVS.
+        ESP32 перезагружается в режим точки доступа «AtomSpectra-Setup»
+        (captive portal для настройки новой WiFi-сети).
+
+        **Внимание:** после этого шлюз станет недоступен в текущей сети.
+      operationId: resetWifi
+      responses:
+        "200":
+          description: WiFi сброшен, ребут
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /:
+    get:
+      tags: [system]
+      summary: Web UI
+      description: Основной веб-интерфейс (HTML, встроен в прошивку).
+      operationId: getWebUi
+      responses:
+        "200":
+          description: HTML-страница Web UI
+          content:
+            text/html:
+              schema:
+                type: string
+
+components:
+  parameters:
+    SpectrumIndex:
+      name: index
+      in: path
+      required: true
+      description: Индекс сохранённого спектра (0–9998)
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 9998
+
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, analyzer_connected, wifi_connected, uptime_sec]
+      properties:
+        status:
+          type: string
+          enum: ["ok", "degraded"]
+          description: "`ok` — прибор подключён и данные идут. `degraded` — USB или WiFi нет."
+        analyzer_connected:
+          type: boolean
+          description: USB-анализатор подключён
+        wifi_connected:
+          type: boolean
+          description: WiFi STA подключён к AP
+        uptime_sec:
+          type: number
+          description: Время работы ESP32 в секундах
+        spectrum_valid:
+          type: boolean
+          description: Спектр получен хотя бы раз
+
+    OkResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+
+    SaveResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        index:
+          type: integer
+          description: Индекс сохранённого спектра (только при ok=true)
+
+    StatusResponse:
+      type: object
+      required: [analyzer_connected, wifi_connected, total_counts, cpu_load, tcp_client]
+      properties:
+        analyzer_connected:
+          type: boolean
+        wifi_connected:
+          type: boolean
+        total_counts:
+          type: integer
+          format: uint32
+        cpu_load:
+          type: integer
+          format: uint16
+          description: "Загрузка CPU прибора в сотых долях процента (0–10000)"
+        tcp_client:
+          type: boolean
+          description: TCP-мост — клиент подключён
+        dev:
+          type: integer
+          description: "Тип устройства (из -inf)"
+        version:
+          type: integer
+          description: "Версия прошивки прибора"
+        mode:
+          type: integer
+        freq:
+          type: number
+        t1:
+          type: number
+          description: "Температура 1 (°C)"
+        t2:
+          type: number
+          description: "Температура 2 (°C)"
+        t3:
+          type: number
+          description: "Температура 3 (°C)"
+        time:
+          type: integer
+          format: uint32
+          description: "Время набора (сек)"
+        noise:
+          type: integer
+        max:
+          type: integer
+
+    SpectrumJson:
+      type: object
+      required: [bins, total, cpu, cps, lost, time, t1, t2, t3, serial]
+      properties:
+        bins:
+          type: array
+          items:
+            type: integer
+            format: uint32
+          minItems: 8192
+          maxItems: 8192
+          description: "8192 каналов спектра"
+        total:
+          type: integer
+          format: uint32
+          description: "Общее число импульсов"
+        cpu:
+          type: integer
+          format: uint16
+          description: "Загрузка CPU (0–10000, сотые %)"
+        cps:
+          type: integer
+          format: uint32
+          description: "Импульсов в секунду"
+        lost:
+          type: integer
+          format: uint32
+          description: "Потерянные импульсы"
+        time:
+          type: integer
+          format: uint32
+          description: "Время набора (сек)"
+        t1:
+          type: number
+        t2:
+          type: number
+        t3:
+          type: number
+        serial:
+          type: string
+          description: "Серийный номер прибора (может быть пустым — BUG-AS-03)"
+        calib:
+          type: array
+          items:
+            type: number
+            format: double
+          minItems: 1
+          maxItems: 5
+          description: "Коэффициенты калибровки [c₀, c₁, …, c₄] (только при наличии калибровки)"
+
+    DeviceResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+          description: "Прибор ответил на -inf"
+        dev:
+          type: integer
+        version:
+          type: integer
+        rise:
+          type: integer
+        fall:
+          type: integer
+        noise:
+          type: integer
+        freq:
+          type: number
+        max_integral:
+          type: integer
+        hyst:
+          type: integer
+        mode:
+          type: integer
+        step:
+          type: integer
+        time:
+          type: integer
+          format: uint32
+        pot:
+          type: integer
+        t1:
+          type: number
+        t2:
+          type: number
+        t3:
+          type: number
+        tc_on:
+          type: boolean
+          description: "Термокомпенсация включена"
+        tp:
+          type: integer
+        serial:
+          type: string
+        calibration:
+          type: array
+          items:
+            type: number
+            format: double
+          description: "Коэффициенты калибровки [c₀..c₄]"
+        calib_order:
+          type: integer
+          description: "Порядок полинома (обычно 4)"
+
+    CalibrationRequest:
+      type: object
+      required: [coeffs]
+      properties:
+        coeffs:
+          type: array
+          items:
+            type: number
+            format: double
+          minItems: 1
+          maxItems: 5
+          description: "Коэффициенты [c₀, c₁, c₂, c₃, c₄] — восходящий порядок"
+
+    SystemResponse:
+      type: object
+      properties:
+        free_heap:
+          type: integer
+          description: "Свободная память (байт)"
+        min_free_heap:
+          type: integer
+          description: "Минимальная свободная память за сессию (байт)"
+        uptime_sec:
+          type: number
+          description: "Время работы (сек)"
+        usb_connected:
+          type: boolean
+        wifi_connected:
+          type: boolean
+        tcp_client:
+          type: boolean
+        flash_total:
+          type: integer
+          description: "LittleFS: общий объём (байт)"
+        flash_used:
+          type: integer
+          description: "LittleFS: использовано (байт)"
+        rssi:
+          type: integer
+          description: "WiFi RSSI (dBm, обычно -30…-90)"
+        ssid:
+          type: string
+          description: "Подключённая WiFi сеть"
+
+    ListResponse:
+      type: object
+      properties:
+        spectra:
+          type: array
+          items:
+            $ref: "#/components/schemas/SavedSpectrumInfo"
+        count:
+          type: integer
+
+    SavedSpectrumInfo:
+      type: object
+      properties:
+        index:
+          type: integer
+        counts:
+          type: integer
+          format: uint32
+        time:
+          type: integer
+          format: uint32
+          description: "Время набора (сек)"
+        saved_at:
+          type: integer
+          description: "Unix timestamp сохранения"

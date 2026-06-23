@@ -208,6 +208,8 @@ Atom Spectra communicates over the binary **shproto** protocol via USB serial (6
 **Calibration**: the instrument returns 5 polynomial coefficients in response to the `-inf`
 command (10 lines of hex-encoded doubles + CRC32). Polynomial: `E(ch) = c₀ + c₁·ch + c₂·ch² + c₃·ch³ + c₄·ch⁴`.
 
+📖 Full reference of all device commands and packet formats — [`PROTOCOL.en.md`](PROTOCOL.en.md).
+
 ## Project layout
 
 ```

@@ -206,6 +206,18 @@ int spectrum_load_from_flash(int index, spectrum_data_t *out)
     return (rd == sizeof(*out)) ? 0 : -1;
 }
 
+void spectrum_set_calibration(const double *coeffs, int order)
+{
+    for (int i = 0; i <= order && i < CALIB_COEFFS; i++)
+        s_spectrum.calibration[i] = coeffs[i];
+    for (int i = order + 1; i < CALIB_COEFFS; i++)
+        s_spectrum.calibration[i] = 0.0;
+    s_spectrum.calib_order = order;
+    s_spectrum.calib_valid = true;
+    ESP_LOGI(TAG, "Manual calibration set: order=%d c0=%.6g c1=%.6g", order,
+             s_spectrum.calibration[0], s_spectrum.calibration[1]);
+}
+
 int spectrum_delete_from_flash(int index)
 {
     char path[64];

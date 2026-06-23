@@ -568,6 +568,49 @@ static esp_err_t handle_system(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handle_set_calibration(httpd_req_t *req)
+{
+    char body[512] = {0};
+    int recv_len = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (recv_len <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+    body[recv_len] = '\0';
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    cJSON *arr = cJSON_GetObjectItem(root, "coeffs");
+    if (!cJSON_IsArray(arr)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing coeffs");
+        return ESP_FAIL;
+    }
+    int n = cJSON_GetArraySize(arr);
+    if (n > CALIB_COEFFS) n = CALIB_COEFFS;
+    double coeffs[CALIB_COEFFS] = {0};
+    for (int i = 0; i < n; i++) {
+        cJSON *item = cJSON_GetArrayItem(arr, i);
+        if (cJSON_IsNumber(item)) coeffs[i] = item->valuedouble;
+    }
+    spectrum_set_calibration(coeffs, n - 1);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+static esp_err_t handle_reboot_esp(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 static esp_err_t handle_wifi_reset(httpd_req_t *req)
 {
     nvs_handle_t nvs;
@@ -613,6 +656,8 @@ void web_server_init(void)
         {"/api/system",                  HTTP_GET,  handle_system,           NULL},
         {"/api/reboot-device",           HTTP_POST, handle_reboot_device,    NULL},
         {"/api/wifi/reset",              HTTP_POST, handle_wifi_reset,       NULL},
+        {"/api/reboot-esp",              HTTP_POST, handle_reboot_esp,       NULL},
+        {"/api/calibration",             HTTP_POST, handle_set_calibration,  NULL},
         {"/",                            HTTP_GET,  handle_index,            NULL},
     };
 

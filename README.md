@@ -42,6 +42,8 @@ WiFi-шлюз для гамма-спектрометра **KB Radar «Atom Spect
 
 ## Что видно в Web UI
 
+![Web UI — спектр в реальном времени](images/web-ui.png)
+
 Web UI открывается в браузере по адресу `http://<IP-платы>/`:
 
 **Спектр (canvas 1200×400)**
@@ -90,7 +92,7 @@ Web UI открывается в браузере по адресу `http://<IP-
 ## Что нужно
 
 **Железо:**
-- **ESP32-S3-DevKitC-1 N16R8** (16 MB Flash, 8 MB PSRAM) — нужен именно S3 с USB OTG
+- **ESP32-S3-DevKitC-1 N16R8** (16 MB Flash, 8 MB PSRAM) — нужен именно S3 с USB OTG ([купить на Ozon](https://ozon.ru/t/BYG7CO2))
 - **USB-C OTG кабель** — от ESP32-S3 (host) к спектрометру (device)
 - Спектрометр **KB Radar «Atom Spectra»** (с USB-портом, внутри FTDI FT232R)
 - USB-кабель для прошивки ESP (через UART-порт, не OTG)

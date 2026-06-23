@@ -26,8 +26,8 @@ void app_main(void)
     }
 
     spectrum_init();
-    spectrum_load_calibration();
     spectrum_restore_autosave();
+    spectrum_load_calibration();
     usb_host_cdc_init();
     web_server_init();
     tcp_bridge_init();

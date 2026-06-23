@@ -1,5 +1,7 @@
 # AtomSpectra → ESP32-S3 → Web UI
 
+**🇷🇺 Русская версия** · [🇬🇧 English](README.en.md)
+
 WiFi-шлюз для гамма-спектрометра **KB Radar «Atom Spectra»** на ESP32-S3 с USB OTG Host.
 
 Подключается к спектрометру по **USB** (не BLE!), принимает 8192-канальный спектр

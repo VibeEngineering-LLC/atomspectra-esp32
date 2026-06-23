@@ -105,7 +105,7 @@ var C=document.getElementById("sp"),X=C.getContext("2d");
 var logEl=document.getElementById("log");
 var overlayBins=null,overlayIdx=-1;
 var isLog=false,isCps=false,isKev=false;
-var calib=null,lastD=null;
+var calib=null,lastD=null,calibEditing=false;
 var PL=65,PT=15,PW=1120,PH=340,PR=PL+PW,PB=PT+PH;
 
 function lg(m){logEl.textContent+=m+"\n";logEl.scrollTop=logEl.scrollHeight}
@@ -134,7 +134,7 @@ async function update(){
   var r=await fetch("/api/spectrum.json");
   if(!r.ok){clearCanvas();document.getElementById("status").textContent="Нет данных";return}
   var d=await r.json();
-  if(d.calib){calib=d.calib;fillCalibFields(d.calib)}
+  if(d.calib){calib=d.calib;if(!calibEditing)fillCalibFields(d.calib)}
   if(d.serial)document.getElementById("device-name").textContent=d.serial;
   lastD=d;
   document.getElementById("status").textContent=
@@ -227,12 +227,12 @@ async function applyCalib(){
  var coeffs=[e,d,c,b,a];
  try{
   var r=await fetch("/api/calibration",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coeffs:coeffs})});
-  if(r.ok){calib=coeffs;document.getElementById("calib-status").textContent="Применена";document.getElementById("calib-status").style.color="#0f0";lg("Calibration: ["+coeffs.join(", ")+"]");if(lastD)draw(lastD)}
+  if(r.ok){calibEditing=false;calib=coeffs;document.getElementById("calib-status").textContent="Применена";document.getElementById("calib-status").style.color="#0f0";lg("Calibration: ["+coeffs.join(", ")+"]");if(lastD)draw(lastD)}
   else{document.getElementById("calib-status").textContent="Ошибка";document.getElementById("calib-status").style.color="#f44"}
  }catch(err){lg("Calibration error: "+err)}
 }
 function clearCalib(){
- calib=null;
+ calibEditing=true;calib=null;
  ["cal-a","cal-b","cal-c","cal-d","cal-e"].forEach(function(id){document.getElementById(id).value=""});
  document.getElementById("calib-status").textContent="Не задана";document.getElementById("calib-status").style.color="#060";
  if(isKev)setKev(false);else if(lastD)draw(lastD);
@@ -275,16 +275,17 @@ async function startAcq(){await fetch("/api/command",{method:"POST",body:"-sta"}
 async function stopAcq(){await fetch("/api/command",{method:"POST",body:"-sto"});lg("Stop sent")}
 async function resetSpectrum(){clearCanvas();lastD=null;document.getElementById("big-time").textContent="00:00:00";document.getElementById("big-cps").textContent="0";document.getElementById("big-total").textContent="0";await fetch("/api/reset",{method:"POST"});lg("Reset sent")}
 async function saveSpectrum(){var r=await(await fetch("/api/save",{method:"POST"})).json();lg(r.ok?"Сохранён #"+r.index:"Save error");if(r.ok){loadSaved();loadFlashInfo()}}
-async function requestInfo(){await fetch("/api/command",{method:"POST",body:"-inf"});lg("Info requested");setTimeout(update,500)}
+async function requestInfo(){calibEditing=false;await fetch("/api/command",{method:"POST",body:"-inf"});lg("Info requested");setTimeout(update,500)}
 async function sendCmd(){var c=document.getElementById("cmd").value;if(!c)return;await fetch("/api/command",{method:"POST",body:c});lg("Sent: "+c);setTimeout(update,500)}
 function toggleLogPanel(){logEl.style.display=logEl.style.display==="none"?"block":"none"}
 async function rebootDevice(){if(!confirm("Перезагрузить спектрометр?"))return;await fetch("/api/reboot-device",{method:"POST"});lg("Reboot device sent")}
 async function rebootEsp(){if(!confirm("Перезагрузить ESP32?"))return;await fetch("/api/reboot-esp",{method:"POST"});document.getElementById("status").textContent="Перезагрузка..."}
 async function resetWifi(){if(!confirm("Сбросить WiFi?"))return;await fetch("/api/wifi/reset",{method:"POST"});document.getElementById("status").textContent="Настройка WiFi..."}
 document.getElementById("cmd").addEventListener("keydown",function(e){if(e.key==="Enter")sendCmd()});
+["cal-a","cal-b","cal-c","cal-d","cal-e"].forEach(function(id){document.getElementById(id).addEventListener("focus",function(){calibEditing=true})});
 async function initCalib(){
  try{var r=await(await fetch("/api/device")).json();
- if(r.calibration){calib=r.calibration;fillCalibFields(r.calibration)}
+ if(r.calibration){calib=r.calibration;if(!calibEditing)fillCalibFields(r.calibration)}
  if(r.serial){document.getElementById("device-name").textContent=r.serial}}catch(e){}
 }
 setInterval(update,1000);

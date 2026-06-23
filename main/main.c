@@ -26,6 +26,7 @@ void app_main(void)
     }
 
     spectrum_init();
+    spectrum_restore_autosave();
     usb_host_cdc_init();
     web_server_init();
     tcp_bridge_init();
@@ -33,7 +34,7 @@ void app_main(void)
 
     ESP_LOGI(TAG, "All subsystems initialized");
 
-    int info_tick = 0;
+    int info_tick = 0, autosave_tick = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
         const spectrum_data_t *sp = spectrum_get_current();
@@ -46,6 +47,10 @@ void app_main(void)
         if (usb_host_cdc_is_connected() && ++info_tick >= 3) {
             info_tick = 0;
             usb_host_send_text_command("-inf");
+        }
+        if (++autosave_tick >= 6) {
+            autosave_tick = 0;
+            spectrum_autosave();
         }
     }
 }

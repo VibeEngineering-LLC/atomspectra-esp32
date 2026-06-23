@@ -402,6 +402,21 @@ static esp_err_t handle_export_csv(httpd_req_t *req)
     return render_spectrum_csv(req, sp, "spectrum.csv");
 }
 
+static esp_err_t handle_saved_export_xml(httpd_req_t *req);
+static esp_err_t handle_saved_export_csv(httpd_req_t *req);
+static esp_err_t handle_saved_json(httpd_req_t *req);
+
+static esp_err_t handle_saved_get(httpd_req_t *req)
+{
+    const char *p = req->uri + 11;
+    while (*p >= '0' && *p <= '9') p++;
+    if (strcmp(p, "/export.xml") == 0) return handle_saved_export_xml(req);
+    if (strcmp(p, "/export.csv") == 0) return handle_saved_export_csv(req);
+    if (strcmp(p, "/spectrum.json") == 0) return handle_saved_json(req);
+    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Unknown saved action");
+    return ESP_FAIL;
+}
+
 static esp_err_t handle_saved_export_xml(httpd_req_t *req)
 {
     int idx = parse_saved_index(req->uri);
@@ -648,10 +663,8 @@ void web_server_init(void)
         {"/api/list",                    HTTP_GET,  handle_list,             NULL},
         {"/api/export.xml",              HTTP_GET,  handle_export_xml,       NULL},
         {"/api/export.csv",              HTTP_GET,  handle_export_csv,       NULL},
-        {"/api/saved/*/export.xml",      HTTP_GET,  handle_saved_export_xml, NULL},
-        {"/api/saved/*/export.csv",      HTTP_GET,  handle_saved_export_csv, NULL},
-        {"/api/saved/*/spectrum.json",   HTTP_GET,  handle_saved_json,       NULL},
-        {"/api/saved/*/delete",          HTTP_POST, handle_saved_delete,     NULL},
+        {"/api/saved/*",                 HTTP_GET,  handle_saved_get,        NULL},
+        {"/api/saved/*",                 HTTP_POST, handle_saved_delete,     NULL},
         {"/api/device",                  HTTP_GET,  handle_device,           NULL},
         {"/api/system",                  HTTP_GET,  handle_system,           NULL},
         {"/api/reboot-device",           HTTP_POST, handle_reboot_device,    NULL},

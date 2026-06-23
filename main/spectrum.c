@@ -9,6 +9,8 @@
 
 static const char *TAG = "spectrum";
 #define STORAGE_PATH "/sto" "rage"
+#define AUTOSAVE_FILE STORAGE_PATH "/current.bin"
+#define AUTOSAVE_RESERVE (1024 * 1024)
 
 static spectrum_data_t s_spectrum;
 static device_info_t   s_device_info;
@@ -160,6 +162,12 @@ const device_info_t   *spectrum_get_device_info(void) { return &s_device_info; }
 int spectrum_save_to_flash(void)
 {
     if (!s_spectrum.valid) return -1;
+    size_t total = 0, used = 0;
+    esp_littlefs_info("storage", &total, &used);
+    if (total - used < AUTOSAVE_RESERVE + sizeof(spectrum_data_t)) {
+        ESP_LOGW(TAG, "Save rejected: free=%zu < reserve=%d", total - used, AUTOSAVE_RESERVE);
+        return -2;
+    }
     char path[64];
     int idx = 0;
     FILE *f;
@@ -216,6 +224,27 @@ void spectrum_set_calibration(const double *coeffs, int order)
     s_spectrum.calib_valid = true;
     ESP_LOGI(TAG, "Manual calibration set: order=%d c0=%.6g c1=%.6g", order,
              s_spectrum.calibration[0], s_spectrum.calibration[1]);
+}
+
+void spectrum_autosave(void)
+{
+    if (!s_spectrum.valid) return;
+    FILE *f = fopen(AUTOSAVE_FILE, "wb");
+    if (!f) { ESP_LOGE(TAG, "Autosave open failed"); return; }
+    fwrite(&s_spectrum, sizeof(s_spectrum), 1, f);
+    fclose(f);
+}
+
+void spectrum_restore_autosave(void)
+{
+    FILE *f = fopen(AUTOSAVE_FILE, "rb");
+    if (!f) return;
+    size_t rd = fread(&s_spectrum, 1, sizeof(s_spectrum), f);
+    fclose(f);
+    if (rd == sizeof(s_spectrum) && s_spectrum.valid)
+        ESP_LOGI(TAG, "Restored autosave: %" PRIu32 " counts, %" PRIu32 "s", s_spectrum.total_counts, s_spectrum.total_time_sec);
+    else
+        memset(&s_spectrum, 0, sizeof(s_spectrum));
 }
 
 int spectrum_delete_from_flash(int index)

@@ -90,5 +90,7 @@ int  spectrum_list_saved(char *buf, size_t buf_size);
 int  spectrum_load_from_flash(int index, spectrum_data_t *out);
 int  spectrum_delete_from_flash(int index);
 void spectrum_set_calibration(const double *coeffs, int order);
+void spectrum_save_calibration(void);
+void spectrum_load_calibration(void);
 void spectrum_autosave(void);
 void spectrum_restore_autosave(void);

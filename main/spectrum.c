@@ -10,7 +10,15 @@
 static const char *TAG = "spectrum";
 #define STORAGE_PATH "/sto" "rage"
 #define AUTOSAVE_FILE STORAGE_PATH "/current.bin"
+#define CALIB_FILE    STORAGE_PATH "/calib.bin"
 #define AUTOSAVE_RESERVE (1024 * 1024)
+
+typedef struct {
+    char serial[64];
+    double calibration[CALIB_COEFFS];
+    int calib_order;
+    uint8_t valid;
+} calib_store_t;
 
 static spectrum_data_t s_spectrum;
 static device_info_t   s_device_info;
@@ -107,6 +115,7 @@ void spectrum_process_info_response(const char *text)
             while (order > 0 && s_spectrum.calibration[order] == 0.0) order--;
             s_spectrum.calib_order = order;
             s_spectrum.calib_valid = true;
+            spectrum_save_calibration();
             ESP_LOGI(TAG, "Calibration OK: order=%d", s_spectrum.calib_order);
         } else {
             ESP_LOGW(TAG, "Calibration CRC mismatch: computed=%08x expected=%08x", (unsigned)cc, (unsigned)ce);
@@ -214,6 +223,21 @@ int spectrum_load_from_flash(int index, spectrum_data_t *out)
     return (rd == sizeof(*out)) ? 0 : -1;
 }
 
+void spectrum_save_calibration(void)
+{
+    if (!s_spectrum.calib_valid) return;
+    calib_store_t st = {0};
+    strncpy(st.serial, s_spectrum.serial_number, sizeof(st.serial) - 1);
+    memcpy(st.calibration, s_spectrum.calibration, sizeof(st.calibration));
+    st.calib_order = s_spectrum.calib_order;
+    st.valid = 1;
+    FILE *f = fopen(CALIB_FILE, "wb");
+    if (!f) return;
+    fwrite(&st, sizeof(st), 1, f);
+    fclose(f);
+    ESP_LOGI(TAG, "Calibration saved for '%s'", st.serial);
+}
+
 void spectrum_set_calibration(const double *coeffs, int order)
 {
     for (int i = 0; i <= order && i < CALIB_COEFFS; i++)
@@ -224,6 +248,23 @@ void spectrum_set_calibration(const double *coeffs, int order)
     s_spectrum.calib_valid = true;
     ESP_LOGI(TAG, "Manual calibration set: order=%d c0=%.6g c1=%.6g", order,
              s_spectrum.calibration[0], s_spectrum.calibration[1]);
+    spectrum_save_calibration();
+}
+
+void spectrum_load_calibration(void)
+{
+    FILE *f = fopen(CALIB_FILE, "rb");
+    if (!f) return;
+    calib_store_t st = {0};
+    size_t rd = fread(&st, 1, sizeof(st), f);
+    fclose(f);
+    if (rd != sizeof(st) || !st.valid) return;
+    memcpy(s_spectrum.calibration, st.calibration, sizeof(st.calibration));
+    s_spectrum.calib_order = st.calib_order;
+    s_spectrum.calib_valid = true;
+    if (st.serial[0] && !s_spectrum.serial_number[0])
+        strncpy(s_spectrum.serial_number, st.serial, sizeof(s_spectrum.serial_number) - 1);
+    ESP_LOGI(TAG, "Calibration loaded: order=%d serial='%s'", st.calib_order, st.serial);
 }
 
 void spectrum_autosave(void)

@@ -1,16 +1,14 @@
 # AtomSpectra -> BecqMoni REST API
 
-Спецификация: [atomspectra-becqmoni-compat.openapi.yaml](/C:/Users/moroz/source/repos/atomspectra-esp32/openapi/atomspectra-becqmoni-compat.openapi.yaml)
+Спецификация: [atomspectra-becqmoni-compat.openapi.yaml](atomspectra-becqmoni-compat.openapi.yaml)
 
 ## Что изучено
 
-- Текущая HTTP-реализация в [main/web_server.c](/C:/Users/moroz/source/repos/atomspectra-esp32/main/web_server.c)
-- Парсинг спектра и `-inf` в [main/spectrum.c](/C:/Users/moroz/source/repos/atomspectra-esp32/main/spectrum.c)
-- Текстовые команды в [main/usb_host_cdc.c](/C:/Users/moroz/source/repos/atomspectra-esp32/main/usb_host_cdc.c)
-- Активное поведение .NET-клиента в
-  [AtomSpectraDeviceController.cs](/C:/Users/moroz/source/repos/BQ%20Eng%20res%20.NET%204.8/BecquerelMonitor/AtomSpectraDeviceController.cs)
-  и
-  [AtomSpectraVCPDeviceForm.cs](/C:/Users/moroz/source/repos/BQ%20Eng%20res%20.NET%204.8/BecquerelMonitor/AtomSpectraVCPDeviceForm.cs)
+- Текущая HTTP-реализация в [`main/web_server.c`](../main/web_server.c)
+- Парсинг спектра и `-inf` в [`main/spectrum.c`](../main/spectrum.c)
+- Текстовые команды в [`main/usb_host_cdc.c`](../main/usb_host_cdc.c)
+- Активное поведение .NET-клиента в `BecquerelMonitor/AtomSpectraDeviceController.cs`
+  и `BecquerelMonitor/AtomSpectraVCPDeviceForm.cs` (внешний репозиторий BecqMoni .NET 4.8)
 
 ## Ключевой вывод
 
@@ -18,7 +16,7 @@
 Главный пробел для интеграции с BecqMoni: `POST /api/command` не возвращает текстовый ответ прибора и не умеет ждать `-ok` / `-inf` / `-cal`.
 Для BecqMoni это не optional-улучшение, а обязательная часть API, потому что активный .NET-код прямо опирается на поведение `sendCommand()`, `waitForAnswer()` и `getCommandOutput()`.
 
-После проверки Android-кода из `C:\Users\moroz\source\repos\atomspectra` выяснилось, что для полного покрытия нужны ещё несколько device-side сценариев:
+После проверки Android-кода (внешний репозиторий `atomspectra`) выяснилось, что для полного покрытия нужны ещё несколько device-side сценариев:
 
 - `-stt` для определения, идёт ли набор сейчас
 - `-mode 0` при подключении USB-прибора

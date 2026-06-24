@@ -1,0 +1,1070 @@
+openapi: 3.0.3
+info:
+  title: AtomSpectra ESP32 Gateway REST API for BecqMoni .NET 4.8
+  version: 0.1.0
+  description: |
+    Proposed REST API for integrating the AtomSpectra ESP32 gateway with
+    `BQ Eng res .NET 4.8` / BecqMoni.
+
+    The proposal is derived from the active behavior in:
+    - `BecquerelMonitor/AtomSpectraDeviceController.cs`
+    - `BecquerelMonitor/AtomSpectraVCPDeviceForm.cs`
+
+    The file intentionally mixes:
+    - currently available firmware endpoints (`x-implementation-status: implemented`)
+    - proposed `/api/v1/...` endpoints that should be added for clean .NET integration
+      (`x-implementation-status: proposed`)
+
+    Main gap found during analysis:
+    the current `POST /api/command` sends a text command to the analyzer but does
+    not expose the analyzer text response and does not wait for `-ok`, `-inf`,
+    `-cal`, or warning lines. This is the main blocker for direct replacement of
+    `sendCommand()`, `waitForAnswer()`, and `getCommandOutput()`.
+servers:
+  - url: http://{deviceHost}
+    description: AtomSpectra ESP32 gateway
+    variables:
+      deviceHost:
+        default: atomspectra.local
+        description: IP address or hostname of the ESP32 gateway
+tags:
+  - name: Existing firmware API
+    description: Endpoints already present in `main/web_server.c`
+  - name: BecqMoni v1 API
+    description: Proposed `/api/v1/...` endpoints tailored to the active .NET use cases
+paths:
+  /api/csrf-token:
+    get:
+      tags: [Existing firmware API]
+      summary: Get CSRF token for mutating requests
+      operationId: getCsrfToken
+      x-implementation-status: implemented
+      responses:
+        '200':
+          description: CSRF token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token:
+                    type: string
+                    description: 32-character hex token
+
+  /api/device:
+    get:
+      tags: [Existing firmware API]
+      summary: Get parsed analyzer information
+      operationId: getDeviceInfo
+      x-implementation-status: implemented
+      description: |
+        Backed by `handle_device()` in `main/web_server.c`.
+        Data is populated from periodic `-inf` polling inside the firmware.
+      responses:
+        '200':
+          description: Device information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FirmwareDeviceInfo'
+
+  /api/spectrum.json:
+    get:
+      tags: [Existing firmware API]
+      summary: Get live spectrum and counters
+      operationId: getLiveSpectrum
+      x-implementation-status: implemented
+      responses:
+        '200':
+          description: Live spectrum snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FirmwareSpectrumSnapshot'
+        '404':
+          description: No spectrum yet
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/command:
+    post:
+      tags: [Existing firmware API]
+      summary: Send raw analyzer text command
+      operationId: postRawCommand
+      x-implementation-status: implemented
+      description: |
+        Sends a text command to the analyzer through shproto.
+        Important limitation: only reports transport acceptance and does not
+        return the analyzer text reply.
+      security:
+        - csrfTokenHeader: []
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+            example: -sta
+      responses:
+        '200':
+          description: Command accepted or rejected at transport layer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkEnvelope'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+
+  /api/reset:
+    post:
+      tags: [Existing firmware API]
+      summary: Reset current spectrum
+      operationId: resetSpectrumLegacy
+      x-implementation-status: implemented
+      security:
+        - csrfTokenHeader: []
+      responses:
+        '200':
+          description: Reset sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkEnvelope'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+
+  /api/v1/device/test:
+    get:
+      tags: [BecqMoni v1 API]
+      summary: Test analyzer availability and fetch identity
+      operationId: testAnalyzerCompatibility
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraVCPDeviceForm.TestConnection
+        - AtomSpectraVCPDeviceForm.TestSerialNumber
+      description: |
+        Replaces COM-port probing from the WinForms form.
+
+        Unlike the COM implementation, REST clients do not select a serial port
+        or baud rate. The gateway owns the USB link to the analyzer, so the
+        result is a gateway-level analyzer check that also exposes the
+        serial number and the dead-time parameters derived from `-inf`.
+      responses:
+        '200':
+          description: Compatibility status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompatDeviceTestResponse'
+        '503':
+          description: Gateway reachable, analyzer not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompatDeviceTestResponse'
+
+  /api/v1/device/cps:
+    get:
+      tags: [BecqMoni v1 API]
+      summary: Get current CPS
+      operationId: getCompatibilityCps
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraDeviceController.getCPS
+      description: |
+        Convenience endpoint for the exact `getCPS()` use case.
+        Can be backed by the current `GET /api/spectrum.json`.
+      responses:
+        '200':
+          description: Current counts-per-second
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cps, elapsedTimeSec]
+                properties:
+                  cps:
+                    type: integer
+                    format: int32
+                  elapsedTimeSec:
+                    type: integer
+                    format: int32
+
+  /api/v1/device/temperature:
+    get:
+      tags: [BecqMoni v1 API]
+      summary: Get current temperatures
+      operationId: getCompatibilityTemperature
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraDeviceController.getTemp
+      description: |
+        Returns the primary temperature plus all parsed temperature channels.
+        Can be backed by the current `GET /api/device`.
+      responses:
+        '200':
+          description: Current temperatures
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [primary, t1, t2, t3]
+                properties:
+                  primary:
+                    type: string
+                    description: Exact UI-friendly value for the old `getTemp()` call
+                    example: "33.5"
+                  t1:
+                    type: number
+                    format: float
+                  t2:
+                    type: number
+                    format: float
+                  t3:
+                    type: number
+                    format: float
+
+  /api/v1/device/dead-time:
+    get:
+      tags: [BecqMoni v1 API]
+      summary: Get dead-time inputs and derived dead-time
+      operationId: getCompatibilityDeadTime
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraVCPDeviceForm.deadTimeBtn_Click
+      description: |
+        Exposes the same calculation used in the WinForms form:
+        `deadTimeSec = (rise + fall + 1) / frequencyHz`
+      responses:
+        '200':
+          description: Dead-time information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompatDeadTimeResponse'
+
+  /api/v1/device/noise:
+    get:
+      tags: [BecqMoni v1 API]
+      summary: Get current device noise discriminator
+      operationId: getDeviceNoise
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraSettings.sendUsbInfoRequest
+        - AtomSpectraSettings.getParameter(data, "NOISE")
+      description: |
+        Preferred high-level replacement for reading `NOISE` from `-inf`.
+      responses:
+        '200':
+          description: Current noise discriminator
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceNoiseResponse'
+    put:
+      tags: [BecqMoni v1 API]
+      summary: Update device noise discriminator
+      operationId: setDeviceNoise
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraSettings.saveNoiseDiscriminatorToUSB
+      description: |
+        High-level replacement for `-nos <value>`.
+      security:
+        - csrfTokenHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: integer
+                  minimum: 0
+                  maximum: 2048
+      responses:
+        '200':
+          description: Noise discriminator updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceSettingWriteResponse'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+
+  /api/v1/device/mode:
+    post:
+      tags: [BecqMoni v1 API]
+      summary: Set analyzer operating mode
+      operationId: setDeviceMode
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraService.onUSBAttached
+        - SERVICE_MODE_ID / "-mode 0"
+      description: |
+        High-level replacement for `-mode <0|1|2>`.
+        Android actively forces mode `0` when a USB device is attached.
+      security:
+        - csrfTokenHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: integer
+                  enum: [0, 1, 2]
+      responses:
+        '200':
+          description: Mode updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceSettingWriteResponse'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+
+  /api/v1/device/calibration:
+    get:
+      tags: [BecqMoni v1 API]
+      summary: Read calibration data and serial number from analyzer registers
+      operationId: readDeviceCalibration
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraService / SERVICE_CAL_ID
+        - AtomSpectra.getCalibrationSettingsFromDevice
+      description: |
+        Device-side calibration read via `-cal`.
+
+        This is not the same as the current firmware endpoint `POST /api/calibration`,
+        which only updates calibration inside the gateway snapshot.
+      responses:
+        '200':
+          description: Calibration registers read from analyzer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceCalibrationReadResponse'
+        '504':
+          description: Analyzer did not answer the calibration read in time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceCalibrationReadResponse'
+    put:
+      tags: [BecqMoni v1 API]
+      summary: Write calibration coefficients to analyzer registers
+      operationId: writeDeviceCalibration
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectra.setCalibrationSettingsToDevice
+      description: |
+        Device-side calibration write via the `-cal <register> <hex>` sequence.
+
+        The Android app writes 11 commands: 10 data half-registers for 5 doubles
+        plus one CRC register. The API should perform that sequence server-side
+        and return aggregated success or failure.
+      security:
+        - csrfTokenHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [coeffs]
+              properties:
+                coeffs:
+                  type: array
+                  minItems: 1
+                  maxItems: 5
+                  items:
+                    type: number
+                    format: double
+                writeCrcRegister:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Calibration write completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceCalibrationWriteResponse'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+
+  /api/v1/commands/execute:
+    post:
+      tags: [BecqMoni v1 API]
+      summary: Execute analyzer text command and return raw reply
+      operationId: executeCompatibilityCommand
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraVCPIn.sendCommand
+        - AtomSpectraVCPIn.waitForAnswer
+        - AtomSpectraVCPIn.getCommandOutput
+        - AtomSpectraVCPDeviceForm.CommandLineIn_KeyDown
+      description: |
+        This is the key missing endpoint for BecqMoni integration.
+
+        `POST /api/command` is not enough for the .NET client because it only
+        confirms transport acceptance and does not return analyzer text output
+        or wait for `-ok`, `-inf`, `-cal`, and warning lines.
+
+        It should:
+        1. send a raw analyzer text command
+        2. wait for analyzer text reply up to `timeoutMs`
+        3. optionally check `expectedReply`
+        4. return the raw response text and matching status
+      security:
+        - csrfTokenHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteCommandRequest'
+      responses:
+        '200':
+          description: Command reply captured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteCommandResponse'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+        '504':
+          description: Analyzer did not respond in time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteCommandResponse'
+
+  /api/v1/measurement/start:
+    post:
+      tags: [BecqMoni v1 API]
+      summary: Start new acquisition
+      operationId: startCompatibilityMeasurement
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraDeviceController.StartMeasurement
+      description: |
+        Semantically replaces the WinForms start sequence:
+        optional `-sto`, optional `-rst`, then `-sta`.
+      security:
+        - csrfTokenHeader: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartMeasurementRequest'
+      responses:
+        '200':
+          description: Measurement started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeasurementCommandResponse'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+        '409':
+          description: Analyzer not connected or command rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeasurementCommandResponse'
+
+  /api/v1/measurement/attach:
+    post:
+      tags: [BecqMoni v1 API]
+      summary: Attach to currently running acquisition
+      operationId: attachCompatibilityMeasurement
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraDeviceController.AttachToDevice
+      description: |
+        Semantically equivalent to the WinForms attach flow:
+        do not clear the spectrum, just send `-sta` and start polling.
+      security:
+        - csrfTokenHeader: []
+      responses:
+        '200':
+          description: Attached to acquisition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeasurementCommandResponse'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+        '409':
+          description: Analyzer not connected or command rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeasurementCommandResponse'
+
+  /api/v1/measurement/stop:
+    post:
+      tags: [BecqMoni v1 API]
+      summary: Stop acquisition
+      operationId: stopCompatibilityMeasurement
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraDeviceController.StopMeasurement
+      security:
+        - csrfTokenHeader: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                presetElapsed:
+                  type: boolean
+                  default: false
+                  description: When true, the server may emulate the legacy post-preset settling delay before `-sto`
+      responses:
+        '200':
+          description: Stop requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeasurementCommandResponse'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+
+  /api/v1/measurement/reset:
+    post:
+      tags: [BecqMoni v1 API]
+      summary: Clear current acquisition
+      operationId: resetCompatibilityMeasurement
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraDeviceController.ClearMeasurementResult
+      description: |
+        High-level reset endpoint returning the post-reset state.
+        Can internally call the current `POST /api/reset`.
+      security:
+        - csrfTokenHeader: []
+      responses:
+        '200':
+          description: Measurement cleared
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeasurementCommandResponse'
+        '403':
+          $ref: '#/components/responses/BadCsrf'
+
+  /api/v1/measurement/state:
+    get:
+      tags: [BecqMoni v1 API]
+      summary: Get current analyzer acquisition state
+      operationId: getMeasurementState
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraService.onUSBAttached
+        - SERVICE_STT_ID / "-stt"
+      description: |
+        High-level replacement for `-stt`.
+        The Android client uses this to decide whether acquisition is already
+        running after reconnect.
+      responses:
+        '200':
+          description: Current acquisition state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeasurementStateResponse'
+        '504':
+          description: Analyzer did not answer state query in time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeasurementStateResponse'
+
+  /api/v1/measurement/live:
+    get:
+      tags: [BecqMoni v1 API]
+      summary: Get live acquisition snapshot in BecqMoni-friendly shape
+      operationId: getCompatibilityMeasurementLive
+      x-implementation-status: proposed
+      x-source-methods:
+        - AtomSpectraVCPIn.DataReady
+        - AtomSpectraDeviceController.update_hystogram
+      description: |
+        Primary polling endpoint for replacing the old serial `DataReady` flow.
+
+        If `channels` is lower than the native 8192 channels, the server should
+        compress bins the same way as `AtomSpectraVCPIn` currently does:
+        sum `8192 / channels` native bins into one output bin.
+      parameters:
+        - in: query
+          name: channels
+          required: false
+          schema:
+            type: integer
+            enum: [1024, 2048, 4096, 8192]
+            default: 8192
+          description: Requested channel count for document compatibility
+      responses:
+        '200':
+          description: Live acquisition snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompatibilityLiveMeasurement'
+        '404':
+          description: No spectrum yet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: false
+                  reason:
+                    type: string
+                    example: no_spectrum
+
+components:
+  securitySchemes:
+    csrfTokenHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+
+  responses:
+    BadCsrf:
+      description: Bad or missing CSRF token
+      content:
+        text/plain:
+          schema:
+            type: string
+
+  schemas:
+    OkEnvelope:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+
+    FirmwareDeviceInfo:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+        dev:
+          type: integer
+        version:
+          type: integer
+        rise:
+          type: integer
+        fall:
+          type: integer
+        noise:
+          type: integer
+        freq:
+          type: number
+          format: float
+        max_integral:
+          type: integer
+        hyst:
+          type: integer
+        mode:
+          type: integer
+        step:
+          type: integer
+        time:
+          type: integer
+        pot:
+          type: integer
+        t1:
+          type: number
+          format: float
+        t2:
+          type: number
+          format: float
+        t3:
+          type: number
+          format: float
+        tc_on:
+          type: boolean
+        tp:
+          type: integer
+        serial:
+          type: string
+        calib_order:
+          type: integer
+        calibration:
+          type: array
+          items:
+            type: number
+            format: double
+
+    FirmwareSpectrumSnapshot:
+      type: object
+      required: [bins, total, cpu, cps, lost, time, t1, t2, t3, serial]
+      properties:
+        bins:
+          type: array
+          items:
+            type: integer
+            format: int32
+        total:
+          type: integer
+          format: int32
+        cpu:
+          type: integer
+          format: int32
+          description: CPU load in basis points as used by current firmware
+        cps:
+          type: integer
+          format: int32
+        lost:
+          type: integer
+          format: int32
+        time:
+          type: integer
+          format: int32
+        t1:
+          type: number
+          format: float
+        t2:
+          type: number
+          format: float
+        t3:
+          type: number
+          format: float
+        serial:
+          type: string
+        calib:
+          type: array
+          items:
+            type: number
+            format: double
+
+    CompatDeviceTestResponse:
+      type: object
+      required:
+        - gatewayReachable
+        - analyzerConnected
+        - deviceInfoValid
+        - compatibilityStatus
+      properties:
+        gatewayReachable:
+          type: boolean
+        analyzerConnected:
+          type: boolean
+        deviceInfoValid:
+          type: boolean
+        compatibilityStatus:
+          type: string
+          enum: [connected, analyzer_missing, info_pending]
+        analyzerBaudRate:
+          type: integer
+          example: 600000
+        serialNumber:
+          type: string
+        rise:
+          type: integer
+        fall:
+          type: integer
+        frequencyHz:
+          type: number
+          format: float
+        deadTimeSec:
+          type: number
+          format: double
+        source:
+          type: object
+          properties:
+            deviceInfoEndpoint:
+              type: string
+              example: /api/device
+            periodicInfPolling:
+              type: boolean
+              example: true
+
+    CompatDeadTimeResponse:
+      type: object
+      required: [rise, fall, frequencyHz, deadTimeSec]
+      properties:
+        rise:
+          type: integer
+        fall:
+          type: integer
+        frequencyHz:
+          type: number
+          format: float
+        deadTimeSec:
+          type: number
+          format: double
+        deadTimeUsec:
+          type: number
+          format: double
+
+    DeviceNoiseResponse:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: integer
+        source:
+          type: string
+          enum: [device, cache]
+          nullable: true
+
+    DeviceSettingWriteResponse:
+      type: object
+      required: [ok, applied]
+      properties:
+        ok:
+          type: boolean
+        applied:
+          type: boolean
+        replyText:
+          type: string
+          nullable: true
+        analyzerConnected:
+          type: boolean
+        requestedValue:
+          type: integer
+          nullable: true
+        appliedValue:
+          type: integer
+          nullable: true
+
+    DeviceCalibrationReadResponse:
+      type: object
+      required: [ok, accepted, timedOut]
+      properties:
+        ok:
+          type: boolean
+        accepted:
+          type: boolean
+        timedOut:
+          type: boolean
+        serialNumber:
+          type: string
+          nullable: true
+        coeffs:
+          type: array
+          items:
+            type: number
+            format: double
+        crcOk:
+          type: boolean
+          nullable: true
+        rawRegisters:
+          type: array
+          items:
+            type: string
+        rawReplyText:
+          type: string
+          nullable: true
+
+    DeviceCalibrationWriteResponse:
+      type: object
+      required: [ok, applied]
+      properties:
+        ok:
+          type: boolean
+        applied:
+          type: boolean
+        ackedCommands:
+          type: integer
+        totalCommands:
+          type: integer
+        coeffs:
+          type: array
+          items:
+            type: number
+            format: double
+        failedCommands:
+          type: array
+          items:
+            type: string
+
+    MeasurementStateResponse:
+      type: object
+      required: [ok, state]
+      properties:
+        ok:
+          type: boolean
+        state:
+          type: string
+          enum: [collecting, stopped, unknown]
+        rawReplyText:
+          type: string
+          nullable: true
+        recording:
+          type: boolean
+        analyzerConnected:
+          type: boolean
+
+    ExecuteCommandRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: string
+          example: -inf
+        timeoutMs:
+          type: integer
+          default: 2000
+        expectedReply:
+          type: string
+          nullable: true
+          example: -ok
+        captureMultiline:
+          type: boolean
+          default: true
+
+    ExecuteCommandResponse:
+      type: object
+      required: [ok, accepted, timedOut, matchedExpectedReply]
+      properties:
+        ok:
+          type: boolean
+        accepted:
+          type: boolean
+        timedOut:
+          type: boolean
+        matchedExpectedReply:
+          type: boolean
+        replyText:
+          type: string
+          nullable: true
+        rawLines:
+          type: array
+          items:
+            type: string
+        roundTripMs:
+          type: integer
+        analyzerConnected:
+          type: boolean
+
+    StartMeasurementRequest:
+      type: object
+      properties:
+        stopBeforeStart:
+          type: boolean
+          default: true
+        resetBeforeStart:
+          type: boolean
+          default: true
+        silent:
+          type: boolean
+          default: false
+        requestedPresetTimeSec:
+          type: integer
+          nullable: true
+
+    MeasurementCommandResponse:
+      type: object
+      required: [ok, recording]
+      properties:
+        ok:
+          type: boolean
+        recording:
+          type: boolean
+        commandSequence:
+          type: array
+          items:
+            type: string
+        replyText:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        elapsedTimeSec:
+          type: integer
+          nullable: true
+
+    CompatibilityLiveMeasurement:
+      type: object
+      required:
+        - ok
+        - recording
+        - requestedChannelCount
+        - nativeChannelCount
+        - bins
+        - elapsedTimeSec
+        - validPulseCount
+        - totalPulseCount
+        - invalidPulseCount
+        - channelPitch
+      properties:
+        ok:
+          type: boolean
+        recording:
+          type: boolean
+        requestedChannelCount:
+          type: integer
+        nativeChannelCount:
+          type: integer
+          example: 8192
+        bins:
+          type: array
+          items:
+            type: integer
+            format: int32
+        elapsedTimeSec:
+          type: integer
+        cpuLoadBasisPoints:
+          type: integer
+        cps:
+          type: integer
+        invalidPulseCount:
+          type: integer
+        validPulseCount:
+          type: integer
+        totalPulseCount:
+          type: integer
+        liveTimeSec:
+          type: number
+          format: double
+        channelPitch:
+          type: integer
+          example: 1
+        temperaturesC:
+          type: object
+          properties:
+            t1:
+              type: number
+              format: float
+            t2:
+              type: number
+              format: float
+            t3:
+              type: number
+              format: float
+        calibration:
+          type: object
+          properties:
+            order:
+              type: integer
+            coefficients:
+              type: array
+              items:
+                type: number
+                format: double
+        serialNumber:
+          type: string

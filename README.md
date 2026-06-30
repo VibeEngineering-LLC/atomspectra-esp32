@@ -1,5 +1,11 @@
 # AtomSpectra → ESP32-S3 → Web UI
 
+> ## ⚠️ Репозиторий в архиве
+>
+> Активная разработка и поддержка переехали в **[atomspectra-waterfall-viewer](https://github.com/VibeEngineering-LLC/atomspectra-waterfall-viewer)**.
+>
+> Этот репозиторий переведён в режим «только чтение» и больше не обновляется. За актуальной прошивкой, исправлениями и поддержкой обращайтесь в новый репозиторий.
+
 **🇷🇺 Русская версия** · [🇬🇧 English](README.en.md)
 
 WiFi-шлюз для гамма-спектрометра **KB Radar «Atom Spectra»** на ESP32-S3 с USB OTG Host.

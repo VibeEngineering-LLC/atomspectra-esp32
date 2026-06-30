@@ -2,7 +2,7 @@
 
 > ## ⚠️ This repository is archived
 >
-> Active development and support have moved to **[atomspectra-waterfall-viewer](https://github.com/VibeEngineering-LLC/atomspectra-waterfall-viewer)**.
+> Active development and support have moved to **[atomspectra-waterfall-esp32](https://github.com/VibeEngineering-LLC/atomspectra-waterfall-esp32)**.
 >
 > This repository is now read-only and no longer maintained. For the latest firmware, fixes, and support, please use the new repository.
 

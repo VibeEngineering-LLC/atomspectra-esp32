@@ -2,7 +2,7 @@
 
 > ## ⚠️ Репозиторий в архиве
 >
-> Активная разработка и поддержка переехали в **[atomspectra-waterfall-viewer](https://github.com/VibeEngineering-LLC/atomspectra-waterfall-viewer)**.
+> Активная разработка и поддержка переехали в **[atomspectra-waterfall-esp32](https://github.com/VibeEngineering-LLC/atomspectra-waterfall-esp32)**.
 >
 > Этот репозиторий переведён в режим «только чтение» и больше не обновляется. За актуальной прошивкой, исправлениями и поддержкой обращайтесь в новый репозиторий.
 
